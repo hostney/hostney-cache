@@ -14,12 +14,12 @@ class Hostney_Cache_Admin {
     /** @var Hostney_Cache_Purger */
     private $purger;
 
-    /** @var Hostney_Cache_Memcached */
-    private $memcached;
+    /** @var Hostney_Cache_Object_Cache */
+    private $object_cache;
 
-    public function __construct( Hostney_Cache_Purger $purger, Hostney_Cache_Memcached $memcached ) {
-        $this->purger    = $purger;
-        $this->memcached = $memcached;
+    public function __construct( Hostney_Cache_Purger $purger, Hostney_Cache_Object_Cache $object_cache ) {
+        $this->purger       = $purger;
+        $this->object_cache = $object_cache;
 
         add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
@@ -30,12 +30,18 @@ class Hostney_Cache_Admin {
         add_action( 'wp_ajax_hostney_cache_purge_post', array( $this, 'ajax_purge_post' ) );
         add_action( 'wp_ajax_hostney_cache_clear_log', array( $this, 'ajax_clear_log' ) );
 
-        // AJAX handler — memcached flush
-        add_action( 'wp_ajax_hostney_memcached_flush', array( $this, 'ajax_memcached_flush' ) );
+        // AJAX handler — object cache flush (whichever engine is running)
+        //
+        // ⚠ RENAMED FROM hostney_memcached_flush IN 1.2.0, and admin/js/cache.js
+        // was changed in the same commit. Both sides are in this plugin, so
+        // nothing external breaks - but they must move together, and a stale
+        // browser cache during the upgrade will simply get "Bad Request" from
+        // admin-ajax until it reloads.
+        add_action( 'wp_ajax_hostney_object_cache_flush', array( $this, 'ajax_object_cache_flush' ) );
 
-        // Form POST handlers — memcached drop-in (redirect-based, not AJAX)
-        add_action( 'admin_post_hostney_memcached_install_dropin', array( $this, 'handle_install_dropin' ) );
-        add_action( 'admin_post_hostney_memcached_remove_dropin', array( $this, 'handle_remove_dropin' ) );
+        // Form POST handlers — drop-in (redirect-based, not AJAX)
+        add_action( 'admin_post_hostney_object_cache_install_dropin', array( $this, 'handle_install_dropin' ) );
+        add_action( 'admin_post_hostney_object_cache_remove_dropin', array( $this, 'handle_remove_dropin' ) );
     }
 
     /**
@@ -184,16 +190,16 @@ class Hostney_Cache_Admin {
     }
 
     /**
-     * AJAX: Flush memcached object cache
+     * AJAX: Flush the object cache, whichever engine is running.
      */
-    public function ajax_memcached_flush() {
+    public function ajax_object_cache_flush() {
         check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
 
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
         }
 
-        $result = $this->memcached->flush();
+        $result = $this->object_cache->flush();
 
         if ( $result['success'] ) {
             wp_send_json_success( array( 'message' => $result['message'] ) );
@@ -212,15 +218,23 @@ class Hostney_Cache_Admin {
     public function handle_install_dropin() {
         check_admin_referer( 'hostney_dropin_action', '_hostney_nonce' );
 
+
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( 'Unauthorized.', 403 );
         }
 
-        $force = isset( $_POST['force'] ) && $_POST['force'] === '1';
-        $result = $this->memcached->install_dropin( $force );
+        $force  = isset( $_POST['force'] ) && $_POST['force'] === '1';
+        $result = $this->object_cache->dropin()->install(
+            $force,
+            $this->object_cache->active_backend()
+        );
 
         if ( $result['success'] ) {
-            $this->memcached->flush();
+            // Start clean. A drop-in installed over a cache that already holds
+            // entries written by a DIFFERENT drop-in would read someone else's
+            // key format as its own.
+            $this->object_cache->flush();
+            $this->object_cache->clear_availability_cache();
         }
 
         $redirect = add_query_arg(
@@ -246,7 +260,11 @@ class Hostney_Cache_Admin {
             wp_die( 'Unauthorized.', 403 );
         }
 
-        $result = $this->memcached->remove_dropin();
+        $result = $this->object_cache->dropin()->remove();
+
+        if ( $result['success'] ) {
+            $this->object_cache->clear_availability_cache();
+        }
 
         $redirect = add_query_arg(
             array(

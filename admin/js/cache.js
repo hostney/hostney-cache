@@ -61,10 +61,13 @@
             });
         });
 
-        // Flush memcached object cache (admin page button)
-        $('#hostney-memcached-flush-btn').on('click', function () {
+        // Flush the object cache, whichever engine is running (admin page button).
+        // ⚠ Ids and the AJAX action were renamed from hostney-memcached-* in
+        // 1.2.0; admin/views/cache-page.php and class-hostney-cache-admin.php
+        // moved in the same commit. All three are in this plugin.
+        $('#hostney-object-cache-flush-btn').on('click', function () {
             var $btn = $(this);
-            var $feedback = $('#hostney-memcached-feedback');
+            var $feedback = $('#hostney-object-cache-feedback');
 
             $btn.prop('disabled', true).html('Flushing...<span class="hostney-spinner"></span>');
             $feedback.hide();
@@ -73,7 +76,7 @@
                 url: hostneyCache.ajaxUrl,
                 type: 'POST',
                 data: {
-                    action: 'hostney_memcached_flush',
+                    action: 'hostney_object_cache_flush',
                     nonce: hostneyCache.nonce
                 },
                 success: function (response) {

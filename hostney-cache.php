@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Hostney Cache
  * Plugin URI: https://www.hostney.com
- * Description: Automatic nginx cache and memcached object cache management for Hostney hosting.
- * Version: 1.1.0
+ * Description: Automatic nginx page cache and Redis or Memcached object cache management for Hostney hosting.
+ * Version: 1.2.0
  * Author: Hostney
  * Author URI: https://www.hostney.com
  * License: GPL v2 or later
@@ -17,15 +17,22 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'HOSTNEY_CACHE_VERSION', '1.1.0' );
+define( 'HOSTNEY_CACHE_VERSION', '1.2.0' );
 define( 'HOSTNEY_CACHE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'HOSTNEY_CACHE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
-// Load includes
+// Load includes.
+// ⚠ ORDER MATTERS: the backend base class must be defined before the two
+// engines that extend it, and both engines before the resolver that instantiates
+// them. There is no autoloader here.
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-purger.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-hooks.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-admin.php';
+require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-backend.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-memcached.php';
+require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-redis.php';
+require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-dropin.php';
+require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-object-cache.php';
 
 /**
  * Main plugin class
@@ -42,13 +49,13 @@ class Hostney_Cache {
     }
 
     private function __construct() {
-        $purger    = new Hostney_Cache_Purger();
-        $memcached = new Hostney_Cache_Memcached();
+        $purger       = new Hostney_Cache_Purger();
+        $object_cache = new Hostney_Cache_Object_Cache();
 
         new Hostney_Cache_Hooks( $purger );
 
         if ( is_admin() || ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
-            new Hostney_Cache_Admin( $purger, $memcached );
+            new Hostney_Cache_Admin( $purger, $object_cache );
         }
 
         // Admin bar is available on both admin and frontend
@@ -76,9 +83,11 @@ class Hostney_Cache {
     public function deactivate() {
         delete_option( 'hostney_cache_log' );
 
-        // Remove our object cache drop-in (only if it's ours)
-        $memcached = new Hostney_Cache_Memcached();
-        $memcached->remove_dropin();
+        // Remove our object cache drop-in, and only ours. Leaving it behind
+        // would be worse than removing it: object-cache.php keeps loading after
+        // the plugin is gone, so a deactivated plugin would still be caching.
+        $dropin = new Hostney_Cache_Dropin();
+        $dropin->remove();
     }
 
     /**

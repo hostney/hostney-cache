@@ -1,11 +1,15 @@
 <?php
 /**
- * Hostney Cache Drop-in — WordPress Object Cache using Memcached
+ * Hostney Cache Drop-in — WordPress Object Cache
  *
  * This file is managed by the Hostney Cache plugin.
  * Do not edit it directly — changes will be overwritten on the next update.
  *
- * @version 1.0.0
+ * Supports Redis (ext-redis) and Memcached (ext-memcached). The backend is
+ * chosen AT RUNTIME by probing for each engine's socket, so switching engines
+ * in the Hostney control panel needs no change here and no action on the site.
+ *
+ * @version 1.2.0
  */
 
 /* Hostney Cache Drop-in */
@@ -120,121 +124,328 @@ function wp_cache_delete_multiple( $keys, $group = 'default' ) {
 }
 
 /**
- * Flush the cache for the current site in a multisite network.
+ * Flush the cache for one group.
  */
 function wp_cache_flush_group( $group ) {
     return $GLOBALS['wp_object_cache']->flush_group( $group );
 }
 
 /**
- * Check if a group flush is supported.
+ * Check whether a feature is supported.
  */
 function wp_cache_supports( $feature ) {
     return $GLOBALS['wp_object_cache']->supports( $feature );
 }
 
 /**
- * WordPress Object Cache implementation using PHP Memcached extension.
+ * WordPress Object Cache backed by Redis or Memcached.
  *
- * Self-contained: does not depend on the Hostney Cache plugin being active.
- * Falls back to a non-persistent in-memory array if the connection fails.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * SELF-CONTAINED. This file is loaded during WordPress bootstrap, long before
+ * plugins exist, so it must not depend on the Hostney Cache plugin being active
+ * or even installed. Everything it needs is in this file.
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * THE BACKEND IS CHOSEN PER REQUEST, by probing for a socket. That is the whole
+ * point of the 1.2.0 rewrite: an account that switches from Memcached to Redis
+ * in the control panel needs no plugin action, no re-install and no drop-in
+ * rewrite. The next PHP request finds the new socket and connects.
+ *
+ * Falls back to a non-persistent in-memory array when neither engine answers,
+ * which is what WordPress does with no drop-in at all - the site works, it just
+ * rebuilds every value per request.
  */
 class WP_Object_Cache {
 
-    /** @var Memcached|null */
-    private $mc = null;
+    /** @var Redis|Memcached|null */
+    private $client = null;
 
-    /** @var bool Whether the memcached connection is active */
-    private $mc_connected = false;
+    /** @var string '' | 'redis' | 'memcached' */
+    private $engine = '';
 
-    /** @var array In-memory cache (always used for non-persistent groups, fallback for everything) */
+    /** @var bool Whether a persistent backend is connected */
+    private $connected = false;
+
+    /** @var array In-memory cache. Always used for non-persistent groups, and the whole cache when no backend answers. */
     private $cache = array();
 
-    /** @var array Non-persistent groups — never stored in memcached */
+    /** @var array Non-persistent groups — never sent to the backend */
     private $non_persistent_groups = array();
 
-    /** @var array Global groups — not prefixed with blog ID */
+    /** @var array Global groups — not prefixed with the blog ID */
     private $global_groups = array();
 
     /** @var string Key prefix derived from $table_prefix */
     private $key_prefix = '';
 
-    /** @var int Current blog ID */
+    /** @var string Current blog prefix */
     private $blog_prefix = '';
 
-    /** @var int Cache hit count */
+    /** @var int */
     public $cache_hits = 0;
 
-    /** @var int Cache miss count */
+    /** @var int */
     public $cache_misses = 0;
 
-    /**
-     * Constructor — connect to memcached socket.
-     */
     public function __construct() {
         global $table_prefix, $blog_id;
 
         $this->key_prefix  = substr( md5( $table_prefix ), 0, 8 ) . ':';
         $this->blog_prefix = ( function_exists( 'is_multisite' ) && is_multisite() ? (int) $blog_id : 1 ) . ':';
 
-        if ( ! extension_loaded( 'memcached' ) ) {
-            return;
-        }
-
-        $socket = $this->detect_socket();
-        if ( ! $socket || ! file_exists( $socket ) ) {
-            return;
-        }
-
-        $this->mc = new Memcached( 'hostney_object_cache' );
-
-        // Only add server if the persistent pool is empty
-        $servers = $this->mc->getServerList();
-        if ( empty( $servers ) ) {
-            $this->mc->setOption( Memcached::OPT_CONNECT_TIMEOUT, 500 );
-            $this->mc->setOption( Memcached::OPT_SEND_TIMEOUT, 1000000 );
-            $this->mc->setOption( Memcached::OPT_RECV_TIMEOUT, 1000000 );
-            $this->mc->setOption( Memcached::OPT_SERIALIZER, Memcached::SERIALIZER_PHP );
-            $this->mc->setOption( Memcached::OPT_COMPRESSION, true );
-            $this->mc->addServer( $socket, 0 );
-        }
-
-        // Verify connectivity
-        $version = @$this->mc->getVersion();
-        if ( ! empty( $version ) && $this->mc->getResultCode() === Memcached::RES_SUCCESS ) {
-            $this->mc_connected = true;
-        } else {
-            $this->mc = null;
-        }
+        $this->connect();
     }
 
     /**
-     * Detect the memcached socket path from the system username.
+     * Probe for a backend and connect to the first one that answers.
+     *
+     * ⚠ REDIS IS TRIED FIRST, AND THE SAME ORDER IS IN THE PLUGIN
+     * (Hostney_Cache_Object_Cache::__construct). The two must agree, or the
+     * admin page reports one engine while the site caches into the other.
+     *
+     * Accounts run exactly one engine, so the order should never decide
+     * anything. It matters only in the seconds during a switch when both
+     * sockets can exist.
      */
-    private function detect_socket() {
-        $username = '';
+    private function connect() {
+        $username = $this->detect_username();
+        if ( $username === '' ) {
+            return;
+        }
 
+        if ( $this->connect_redis( '/var/run/redis/redis-' . $username . '.sock' ) ) {
+            return;
+        }
+
+        $this->connect_memcached( '/var/run/memcached/memcached-' . $username . '.sock' );
+    }
+
+    /**
+     * The Linux account PHP runs as. Both socket paths are derived from it.
+     */
+    private function detect_username() {
         if ( function_exists( 'posix_geteuid' ) && function_exists( 'posix_getpwuid' ) ) {
             $info = posix_getpwuid( posix_geteuid() );
             if ( $info && ! empty( $info['name'] ) ) {
-                $username = $info['name'];
+                return $info['name'];
             }
         }
 
-        if ( empty( $username ) ) {
-            $username = get_current_user();
-        }
-
-        if ( empty( $username ) ) {
-            return null;
-        }
-
-        return '/var/run/memcached/memcached-' . $username . '.sock';
+        $name = get_current_user();
+        return is_string( $name ) ? $name : '';
     }
 
     /**
-     * Build the full cache key.
+     * @return bool True when connected.
      */
+    private function connect_redis( $socket ) {
+        if ( ! extension_loaded( 'redis' ) || ! file_exists( $socket ) ) {
+            return false;
+        }
+
+        try {
+            $redis = new Redis();
+
+            // Port 0 means "the first argument is a unix socket".
+            // ⚠ THE TIMEOUT IS IN SECONDS HERE. The Memcached extension below
+            // wants milliseconds for the same idea. 0.5s is generous for a
+            // socket on the same box, and short enough that a dead cache costs
+            // half a second rather than hanging the page.
+            if ( ! @$redis->connect( $socket, 0, 0.5 ) ) {
+                return false;
+            }
+
+            // Store PHP-serialized values, so objects and arrays survive the
+            // round trip. Without this phpredis stores everything as a string
+            // and every cached array comes back as "Array".
+            $redis->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP );
+
+            // A socket that accepts a connection is not a server that answers.
+            if ( @$redis->ping() === false ) {
+                return false;
+            }
+
+            $this->client    = $redis;
+            $this->engine    = 'redis';
+            $this->connected = true;
+            return true;
+        } catch ( Exception $e ) {
+            // phpredis THROWS on connection failure rather than returning
+            // false, so this is the ordinary "not running" path. An uncaught
+            // exception here would be a fatal error during bootstrap, i.e. a
+            // white screen on every page of the site.
+            return false;
+        }
+    }
+
+    /**
+     * @return bool True when connected.
+     */
+    private function connect_memcached( $socket ) {
+        if ( ! extension_loaded( 'memcached' ) || ! file_exists( $socket ) ) {
+            return false;
+        }
+
+        $mc = new Memcached( 'hostney_object_cache' );
+
+        // The persistent-id constructor reuses a pooled server list, so adding
+        // the server again on every request would grow the pool without bound.
+        $servers = $mc->getServerList();
+        if ( empty( $servers ) ) {
+            $mc->setOption( Memcached::OPT_CONNECT_TIMEOUT, 500 );   // milliseconds
+            $mc->setOption( Memcached::OPT_SEND_TIMEOUT, 1000000 );  // microseconds
+            $mc->setOption( Memcached::OPT_RECV_TIMEOUT, 1000000 );  // microseconds
+            $mc->setOption( Memcached::OPT_SERIALIZER, Memcached::SERIALIZER_PHP );
+            $mc->setOption( Memcached::OPT_COMPRESSION, true );
+            $mc->addServer( $socket, 0 );
+        }
+
+        $version = @$mc->getVersion();
+        if ( empty( $version ) || $mc->getResultCode() !== Memcached::RES_SUCCESS ) {
+            return false;
+        }
+
+        $this->client    = $mc;
+        $this->engine    = 'memcached';
+        $this->connected = true;
+        return true;
+    }
+
+    /* ── Backend primitives ──────────────────────────────────────────────
+       The only four places this class knows which engine it is talking to.
+       Everything below them is engine-agnostic.
+       ──────────────────────────────────────────────────────────────────── */
+
+    /**
+     * @param mixed $found Set to true/false so a legitimately cached `false`
+     *                     is not mistaken for a miss. That distinction is the
+     *                     reason this returns via a reference rather than
+     *                     returning false for both cases.
+     */
+    private function backend_get( $key, &$found ) {
+        $found = false;
+        if ( ! $this->connected ) {
+            return false;
+        }
+
+        if ( $this->engine === 'redis' ) {
+            try {
+                $value = $this->client->get( $key );
+            } catch ( Exception $e ) {
+                return false;
+            }
+            // phpredis returns false for a missing key AND for a stored false.
+            // exists() is the only way to tell them apart.
+            if ( $value === false ) {
+                try {
+                    if ( ! $this->client->exists( $key ) ) {
+                        return false;
+                    }
+                } catch ( Exception $e ) {
+                    return false;
+                }
+            }
+            $found = true;
+            return $value;
+        }
+
+        $value = $this->client->get( $key );
+        if ( $this->client->getResultCode() !== Memcached::RES_SUCCESS ) {
+            return false;
+        }
+        $found = true;
+        return $value;
+    }
+
+    private function backend_set( $key, $data, $expire ) {
+        if ( ! $this->connected ) {
+            return true;
+        }
+
+        $expire = max( 0, (int) $expire );
+
+        if ( $this->engine === 'redis' ) {
+            try {
+                // setex refuses a TTL of 0; a zero expiry means "no expiry",
+                // which is plain set.
+                return $expire > 0
+                    ? (bool) $this->client->setex( $key, $expire, $data )
+                    : (bool) $this->client->set( $key, $data );
+            } catch ( Exception $e ) {
+                return false;
+            }
+        }
+
+        return $this->client->set( $key, $data, $expire );
+    }
+
+    private function backend_add( $key, $data, $expire ) {
+        if ( ! $this->connected ) {
+            return true;
+        }
+
+        $expire = max( 0, (int) $expire );
+
+        if ( $this->engine === 'redis' ) {
+            try {
+                // NX makes this atomic; a get-then-set would race.
+                $options = array( 'nx' );
+                if ( $expire > 0 ) {
+                    $options['ex'] = $expire;
+                }
+                return (bool) $this->client->set( $key, $data, $options );
+            } catch ( Exception $e ) {
+                return false;
+            }
+        }
+
+        return $this->client->add( $key, $data, $expire );
+    }
+
+    private function backend_replace( $key, $data, $expire ) {
+        if ( ! $this->connected ) {
+            return false;
+        }
+
+        $expire = max( 0, (int) $expire );
+
+        if ( $this->engine === 'redis' ) {
+            try {
+                $options = array( 'xx' );
+                if ( $expire > 0 ) {
+                    $options['ex'] = $expire;
+                }
+                return (bool) $this->client->set( $key, $data, $options );
+            } catch ( Exception $e ) {
+                return false;
+            }
+        }
+
+        return $this->client->replace( $key, $data, $expire );
+    }
+
+    private function backend_delete( $key ) {
+        if ( ! $this->connected ) {
+            return true;
+        }
+
+        if ( $this->engine === 'redis' ) {
+            try {
+                // A key that was already gone is a successful delete as far as
+                // the caller is concerned.
+                $this->client->del( $key );
+                return true;
+            } catch ( Exception $e ) {
+                return false;
+            }
+        }
+
+        $result = $this->client->delete( $key );
+        return $result || $this->client->getResultCode() === Memcached::RES_NOTFOUND;
+    }
+
+    /* ── WordPress object cache API ──────────────────────────────────── */
+
     private function build_key( $key, $group = 'default' ) {
         if ( empty( $group ) ) {
             $group = 'default';
@@ -249,52 +460,41 @@ class WP_Object_Cache {
         return $prefix . $group . ':' . $key;
     }
 
-    /**
-     * Check if a group is non-persistent.
-     */
     private function is_non_persistent( $group ) {
         return isset( $this->non_persistent_groups[ $group ] );
     }
 
-    /**
-     * Get a value from cache.
-     */
     public function get( $key, $group = 'default', $force = false, &$found = null ) {
         if ( empty( $group ) ) {
             $group = 'default';
         }
 
-        $mc_key = $this->build_key( $key, $group );
+        $cache_key = $this->build_key( $key, $group );
 
-        // Check local cache first (unless forced)
-        if ( ! $force && isset( $this->cache[ $mc_key ] ) ) {
+        if ( ! $force && array_key_exists( $cache_key, $this->cache ) ) {
             $found = true;
             $this->cache_hits++;
-            return is_object( $this->cache[ $mc_key ] ) ? clone $this->cache[ $mc_key ] : $this->cache[ $mc_key ];
+            return is_object( $this->cache[ $cache_key ] ) ? clone $this->cache[ $cache_key ] : $this->cache[ $cache_key ];
         }
 
-        // Non-persistent groups are only in local cache
         if ( $this->is_non_persistent( $group ) ) {
-            $found = isset( $this->cache[ $mc_key ] );
+            $found = array_key_exists( $cache_key, $this->cache );
             if ( $found ) {
                 $this->cache_hits++;
-                return is_object( $this->cache[ $mc_key ] ) ? clone $this->cache[ $mc_key ] : $this->cache[ $mc_key ];
+                return is_object( $this->cache[ $cache_key ] ) ? clone $this->cache[ $cache_key ] : $this->cache[ $cache_key ];
             }
             $this->cache_misses++;
             return false;
         }
 
-        // Try memcached
-        if ( $this->mc_connected ) {
-            $value = $this->mc->get( $mc_key );
-            $res   = $this->mc->getResultCode();
+        $backend_found = false;
+        $value         = $this->backend_get( $cache_key, $backend_found );
 
-            if ( $res === Memcached::RES_SUCCESS ) {
-                $found = true;
-                $this->cache_hits++;
-                $this->cache[ $mc_key ] = $value;
-                return is_object( $value ) ? clone $value : $value;
-            }
+        if ( $backend_found ) {
+            $found = true;
+            $this->cache_hits++;
+            $this->cache[ $cache_key ] = $value;
+            return is_object( $value ) ? clone $value : $value;
         }
 
         $found = false;
@@ -302,9 +502,6 @@ class WP_Object_Cache {
         return false;
     }
 
-    /**
-     * Get multiple values from cache.
-     */
     public function get_multiple( $keys, $group = 'default', $force = false ) {
         $results = array();
         foreach ( $keys as $key ) {
@@ -313,144 +510,89 @@ class WP_Object_Cache {
         return $results;
     }
 
-    /**
-     * Set a value in cache.
-     */
     public function set( $key, $data, $group = 'default', $expire = 0 ) {
         if ( empty( $group ) ) {
             $group = 'default';
         }
 
-        $mc_key = $this->build_key( $key, $group );
+        $cache_key = $this->build_key( $key, $group );
 
         if ( is_object( $data ) ) {
             $data = clone $data;
         }
 
-        $this->cache[ $mc_key ] = $data;
+        $this->cache[ $cache_key ] = $data;
 
         if ( $this->is_non_persistent( $group ) ) {
             return true;
         }
 
-        if ( ! $this->mc_connected ) {
-            return true;
-        }
-
-        $expire = (int) $expire;
-        if ( $expire < 0 ) {
-            $expire = 0;
-        }
-
-        return $this->mc->set( $mc_key, $data, $expire );
+        return $this->backend_set( $cache_key, $data, $expire );
     }
 
-    /**
-     * Add a value only if it does not already exist.
-     */
     public function add( $key, $data, $group = 'default', $expire = 0 ) {
         if ( empty( $group ) ) {
             $group = 'default';
         }
 
-        $mc_key = $this->build_key( $key, $group );
+        $cache_key = $this->build_key( $key, $group );
 
-        // If already in local cache, it "exists"
-        if ( isset( $this->cache[ $mc_key ] ) ) {
+        if ( array_key_exists( $cache_key, $this->cache ) ) {
             return false;
         }
 
-        if ( $this->is_non_persistent( $group ) ) {
-            $this->cache[ $mc_key ] = is_object( $data ) ? clone $data : $data;
+        if ( $this->is_non_persistent( $group ) || ! $this->connected ) {
+            $this->cache[ $cache_key ] = is_object( $data ) ? clone $data : $data;
             return true;
         }
 
-        if ( ! $this->mc_connected ) {
-            $this->cache[ $mc_key ] = is_object( $data ) ? clone $data : $data;
-            return true;
-        }
-
-        $expire = (int) $expire;
-        if ( $expire < 0 ) {
-            $expire = 0;
-        }
-
-        $result = $this->mc->add( $mc_key, $data, $expire );
+        $result = $this->backend_add( $cache_key, $data, $expire );
         if ( $result ) {
-            $this->cache[ $mc_key ] = is_object( $data ) ? clone $data : $data;
+            $this->cache[ $cache_key ] = is_object( $data ) ? clone $data : $data;
         }
 
         return $result;
     }
 
-    /**
-     * Replace a value only if it already exists.
-     */
     public function replace( $key, $data, $group = 'default', $expire = 0 ) {
         if ( empty( $group ) ) {
             $group = 'default';
         }
 
-        $mc_key = $this->build_key( $key, $group );
+        $cache_key = $this->build_key( $key, $group );
 
-        if ( $this->is_non_persistent( $group ) ) {
-            if ( ! isset( $this->cache[ $mc_key ] ) ) {
+        if ( $this->is_non_persistent( $group ) || ! $this->connected ) {
+            if ( ! array_key_exists( $cache_key, $this->cache ) ) {
                 return false;
             }
-            $this->cache[ $mc_key ] = is_object( $data ) ? clone $data : $data;
+            $this->cache[ $cache_key ] = is_object( $data ) ? clone $data : $data;
             return true;
         }
 
-        if ( ! $this->mc_connected ) {
-            if ( ! isset( $this->cache[ $mc_key ] ) ) {
-                return false;
-            }
-            $this->cache[ $mc_key ] = is_object( $data ) ? clone $data : $data;
-            return true;
-        }
-
-        $expire = (int) $expire;
-        if ( $expire < 0 ) {
-            $expire = 0;
-        }
-
-        $result = $this->mc->replace( $mc_key, $data, $expire );
+        $result = $this->backend_replace( $cache_key, $data, $expire );
         if ( $result ) {
-            $this->cache[ $mc_key ] = is_object( $data ) ? clone $data : $data;
+            $this->cache[ $cache_key ] = is_object( $data ) ? clone $data : $data;
         }
 
         return $result;
     }
 
-    /**
-     * Delete a cached value.
-     */
     public function delete( $key, $group = 'default' ) {
         if ( empty( $group ) ) {
             $group = 'default';
         }
 
-        $mc_key = $this->build_key( $key, $group );
+        $cache_key = $this->build_key( $key, $group );
 
-        unset( $this->cache[ $mc_key ] );
+        unset( $this->cache[ $cache_key ] );
 
         if ( $this->is_non_persistent( $group ) ) {
             return true;
         }
 
-        if ( ! $this->mc_connected ) {
-            return true;
-        }
-
-        $result = $this->mc->delete( $mc_key );
-
-        // NOT_FOUND is fine — the key was already gone
-        return $result || $this->mc->getResultCode() === Memcached::RES_NOTFOUND;
+        return $this->backend_delete( $cache_key );
     }
 
-    /**
-     * Delete multiple cached values.
-     */
     public function delete_multiple( $keys, $group = 'default' ) {
         $results = array();
         foreach ( $keys as $key ) {
@@ -459,83 +601,134 @@ class WP_Object_Cache {
         return $results;
     }
 
-    /**
-     * Increment a numeric value.
-     */
     public function incr( $key, $offset = 1, $group = 'default' ) {
         if ( empty( $group ) ) {
             $group = 'default';
         }
 
-        $mc_key = $this->build_key( $key, $group );
+        $cache_key = $this->build_key( $key, $group );
 
-        if ( $this->is_non_persistent( $group ) || ! $this->mc_connected ) {
-            if ( ! isset( $this->cache[ $mc_key ] ) || ! is_numeric( $this->cache[ $mc_key ] ) ) {
+        if ( $this->is_non_persistent( $group ) || ! $this->connected ) {
+            if ( ! isset( $this->cache[ $cache_key ] ) || ! is_numeric( $this->cache[ $cache_key ] ) ) {
                 return false;
             }
-            $this->cache[ $mc_key ] = max( 0, (int) $this->cache[ $mc_key ] + (int) $offset );
-            return $this->cache[ $mc_key ];
+            $this->cache[ $cache_key ] = max( 0, (int) $this->cache[ $cache_key ] + (int) $offset );
+            return $this->cache[ $cache_key ];
         }
 
-        $result = $this->mc->increment( $mc_key, $offset );
+        if ( $this->engine === 'redis' ) {
+            try {
+                // ⚠ INCRBY NEEDS A RAW INTEGER, and OPT_SERIALIZER wrapped
+                // every value in a PHP-serialized string. Without switching the
+                // serializer off for this call, incr on a value we set() would
+                // fail with a type error. Restored immediately afterwards.
+                $this->client->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_NONE );
+                if ( ! $this->client->exists( $cache_key ) ) {
+                    $this->client->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP );
+                    return false;
+                }
+                $result = $this->client->incrBy( $cache_key, (int) $offset );
+                if ( $result < 0 ) {
+                    // WordPress clamps counters at zero.
+                    $this->client->set( $cache_key, 0 );
+                    $result = 0;
+                }
+                $this->client->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP );
+            } catch ( Exception $e ) {
+                $this->client->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP );
+                return false;
+            }
+        } else {
+            $result = $this->client->increment( $cache_key, $offset );
+        }
+
         if ( $result !== false ) {
-            $this->cache[ $mc_key ] = $result;
+            $this->cache[ $cache_key ] = $result;
         }
 
         return $result;
     }
 
-    /**
-     * Decrement a numeric value.
-     */
     public function decr( $key, $offset = 1, $group = 'default' ) {
         if ( empty( $group ) ) {
             $group = 'default';
         }
 
-        $mc_key = $this->build_key( $key, $group );
+        $cache_key = $this->build_key( $key, $group );
 
-        if ( $this->is_non_persistent( $group ) || ! $this->mc_connected ) {
-            if ( ! isset( $this->cache[ $mc_key ] ) || ! is_numeric( $this->cache[ $mc_key ] ) ) {
+        if ( $this->is_non_persistent( $group ) || ! $this->connected ) {
+            if ( ! isset( $this->cache[ $cache_key ] ) || ! is_numeric( $this->cache[ $cache_key ] ) ) {
                 return false;
             }
-            $this->cache[ $mc_key ] = max( 0, (int) $this->cache[ $mc_key ] - (int) $offset );
-            return $this->cache[ $mc_key ];
+            $this->cache[ $cache_key ] = max( 0, (int) $this->cache[ $cache_key ] - (int) $offset );
+            return $this->cache[ $cache_key ];
         }
 
-        $result = $this->mc->decrement( $mc_key, $offset );
+        if ( $this->engine === 'redis' ) {
+            try {
+                $this->client->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_NONE );
+                if ( ! $this->client->exists( $cache_key ) ) {
+                    $this->client->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP );
+                    return false;
+                }
+                $result = $this->client->decrBy( $cache_key, (int) $offset );
+                if ( $result < 0 ) {
+                    $this->client->set( $cache_key, 0 );
+                    $result = 0;
+                }
+                $this->client->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP );
+            } catch ( Exception $e ) {
+                $this->client->setOption( Redis::OPT_SERIALIZER, Redis::SERIALIZER_PHP );
+                return false;
+            }
+        } else {
+            $result = $this->client->decrement( $cache_key, $offset );
+        }
+
         if ( $result !== false ) {
-            $this->cache[ $mc_key ] = $result;
+            $this->cache[ $cache_key ] = $result;
         }
 
         return $result;
     }
 
-    /**
-     * Flush the entire cache.
-     */
     public function flush() {
         $this->cache = array();
 
-        if ( $this->mc_connected ) {
-            return $this->mc->flush();
+        if ( ! $this->connected ) {
+            return true;
         }
 
-        return true;
+        if ( $this->engine === 'redis' ) {
+            try {
+                // flushDB, not flushAll: the instance is configured with a
+                // single database, so they are equivalent today and flushDB
+                // stays correct if that ever changes.
+                return (bool) $this->client->flushDB();
+            } catch ( Exception $e ) {
+                return false;
+            }
+        }
+
+        return $this->client->flush();
     }
 
     /**
-     * Flush a specific cache group.
+     * Flush one cache group.
      *
-     * Memcached does not natively support group flushing.
-     * We use a group version counter to effectively invalidate all keys in the group.
+     * ⚠ THIS ONLY CLEARS THE IN-PROCESS ARRAY. Neither engine can delete by
+     * prefix without walking the keyspace, which is not something to do on a
+     * cache serving a live site.
+     *
+     * supports('flush_group') therefore returns FALSE — see the note there.
+     * This method stays because WordPress may still call it, and clearing the
+     * local copy is strictly better than doing nothing.
      */
     public function flush_group( $group ) {
         if ( empty( $group ) ) {
             return false;
         }
 
-        // Remove local cache entries for this group
         $prefix = $this->build_key( '', $group );
         foreach ( array_keys( $this->cache ) as $cached_key ) {
             if ( strpos( $cached_key, $prefix ) === 0 ) {
@@ -543,58 +736,62 @@ class WP_Object_Cache {
             }
         }
 
-        return true;
+        return false;
     }
 
-    /**
-     * Register global cache groups.
-     */
     public function add_global_groups( $groups ) {
-        $groups = (array) $groups;
-        foreach ( $groups as $group ) {
+        foreach ( (array) $groups as $group ) {
             $this->global_groups[ $group ] = true;
         }
     }
 
-    /**
-     * Register non-persistent cache groups.
-     */
     public function add_non_persistent_groups( $groups ) {
-        $groups = (array) $groups;
-        foreach ( $groups as $group ) {
+        foreach ( (array) $groups as $group ) {
             $this->non_persistent_groups[ $group ] = true;
         }
     }
 
-    /**
-     * Switch the cache to a different blog.
-     */
     public function switch_to_blog( $blog_id ) {
         $this->blog_prefix = (int) $blog_id . ':';
     }
 
     /**
-     * Check if a feature is supported.
+     * ⚠ flush_group NOW REPORTS FALSE. It reported true through 1.1.0 while
+     * only clearing the in-process array, which is worse than not supporting it:
+     * WordPress takes a true here as a promise that a group flush really
+     * invalidates persistent entries, and skips its own fallback. Anything
+     * relying on that promise was reading stale data from the cache for the rest
+     * of the entry's TTL.
+     *
+     * Doing it properly needs a per-group version counter folded into build_key.
+     * That is a change to the hottest path in WordPress and belongs in its own
+     * release, not bundled with the engine switch.
      */
     public function supports( $feature ) {
         switch ( $feature ) {
             case 'get_multiple':
             case 'delete_multiple':
-            case 'flush_group':
                 return true;
+            case 'flush_group':
+                return false;
             default:
                 return false;
         }
     }
 
+    /** Which engine is serving, for the plugin's admin page and for debugging. */
+    public function hostney_engine() {
+        return $this->connected ? $this->engine : '';
+    }
+
     /**
-     * Get cache stats for debugging.
+     * Debug output. WordPress core calls this from wp_cache_stats().
      */
     public function stats() {
         echo '<p>';
         echo '<strong>Cache hits:</strong> ' . esc_html( $this->cache_hits ) . '<br />';
         echo '<strong>Cache misses:</strong> ' . esc_html( $this->cache_misses ) . '<br />';
-        echo '<strong>Memcached connected:</strong> ' . ( $this->mc_connected ? 'Yes' : 'No' ) . '<br />';
+        echo '<strong>Backend:</strong> ' . ( $this->connected ? esc_html( $this->engine ) : 'none (in-memory only)' ) . '<br />';
         echo '</p>';
     }
 }

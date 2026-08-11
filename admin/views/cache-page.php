@@ -16,13 +16,23 @@ if ( ! is_array( $hostney_cache_log ) ) {
 }
 $hostney_cache_log = array_slice( $hostney_cache_log, 0, 20 );
 
-// Memcached status
-$hostney_mc = new Hostney_Cache_Memcached();
-$hostney_mc_extension    = $hostney_mc->is_extension_loaded();
-$hostney_mc_available    = $hostney_mc_extension ? $hostney_mc->is_available() : false;
-$hostney_mc_stats        = $hostney_mc_available ? $hostney_mc->get_stats() : null;
-$hostney_mc_dropin       = $hostney_mc->get_dropin_status();
-$hostney_mc_socket       = $hostney_mc->get_socket_path();
+// Object cache status.
+//
+// THREE DISTINCT STATES, and they are three different messages to a customer:
+//   $hostney_oc_active     an engine is running and answering
+//   $hostney_oc_installable an engine's PHP extension is present but the service
+//                          is off  -> "switch it on in your control panel"
+//   neither                no extension at all -> "not available on this server"
+// Collapsing the last two would tell someone to enable a service their plan
+// does not include, or tell someone whose plan includes it that it is
+// unavailable.
+$hostney_oc             = new Hostney_Cache_Object_Cache();
+$hostney_oc_active      = $hostney_oc->active_backend();
+$hostney_oc_installable = $hostney_oc_active ? $hostney_oc_active : $hostney_oc->installable_backend();
+$hostney_oc_stats       = $hostney_oc_active ? $hostney_oc_active->get_stats() : null;
+$hostney_oc_dropin      = $hostney_oc->dropin()->get_status();
+$hostney_oc_label       = $hostney_oc_installable ? $hostney_oc_installable->get_label() : 'Object cache';
+$hostney_oc_socket      = $hostney_oc_installable ? $hostney_oc_installable->get_socket_path() : '';
 
 // Check for redirect notices from drop-in install/remove
 $hostney_notice_type = isset( $_GET['hostney-notice'] ) ? sanitize_key( $_GET['hostney-notice'] ) : '';
@@ -82,11 +92,11 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                 <tr>
                     <td>Object caching</td>
                     <td>
-                        <?php if ( $hostney_mc_available && $hostney_mc_dropin === 'installed' ) : ?>
-                            <span class="hostney-check-pass">Active</span>
-                        <?php elseif ( $hostney_mc_available ) : ?>
+                        <?php if ( $hostney_oc_active && $hostney_oc_dropin === 'installed' ) : ?>
+                            <span class="hostney-check-pass">Active (<?php echo esc_html( $hostney_oc_active->get_label() ); ?>)</span>
+                        <?php elseif ( $hostney_oc_active ) : ?>
                             <span class="hostney-check-warn">Available (drop-in not installed)</span>
-                        <?php elseif ( $hostney_mc_extension ) : ?>
+                        <?php elseif ( $hostney_oc_installable ) : ?>
                             <span class="hostney-check-warn">Service not running</span>
                         <?php else : ?>
                             <span class="hostney-check-neutral">Not available</span>
@@ -96,14 +106,21 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
             </table>
         </div>
 
-        <!-- Card 2: Object cache (Memcached) -->
+        <!-- Card 2: Object cache (Redis or Memcached, whichever is running) -->
         <div class="hostney-card">
-            <?php if ( $hostney_mc_available ) : ?>
+            <?php if ( $hostney_oc_active ) : ?>
                 <span class="hostney-status-badge hostney-status-badge-active">Active</span>
                 <h2>Object cache</h2>
-                <p>Object caching is active. Database queries and options are cached in memory for faster page generation.</p>
+                <p>
+                    Object caching is active via <strong><?php echo esc_html( $hostney_oc_active->get_label() ); ?></strong>.
+                    Database queries and options are cached in memory for faster page generation.
+                </p>
 
                 <table class="hostney-checks-table">
+                    <tr>
+                        <td>Engine</td>
+                        <td><strong><?php echo esc_html( $hostney_oc_active->get_label() ); ?></strong></td>
+                    </tr>
                     <tr>
                         <td>PHP extension</td>
                         <td><span class="hostney-check-pass">Loaded</span></td>
@@ -114,78 +131,89 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                     </tr>
                     <tr>
                         <td>Socket</td>
-                        <td><strong><?php echo esc_html( $hostney_mc_socket ); ?></strong></td>
+                        <td><strong><?php echo esc_html( $hostney_oc_active->get_socket_path() ); ?></strong></td>
                     </tr>
                     <tr>
                         <td>Drop-in</td>
                         <td>
-                            <?php if ( $hostney_mc_dropin === 'installed' ) : ?>
+                            <?php if ( $hostney_oc_dropin === 'installed' ) : ?>
                                 <span class="hostney-check-pass">Installed</span>
-                            <?php elseif ( $hostney_mc_dropin === 'foreign' ) : ?>
+                            <?php elseif ( $hostney_oc_dropin === 'foreign' ) : ?>
                                 <span class="hostney-check-warn">Foreign (not managed by Hostney)</span>
                             <?php else : ?>
                                 <span class="hostney-check-warn">Not installed</span>
                             <?php endif; ?>
                         </td>
                     </tr>
-                    <?php if ( $hostney_mc_stats ) : ?>
+                    <?php if ( $hostney_oc_stats ) : ?>
                         <tr>
                             <td>Hit ratio</td>
-                            <td><strong><?php echo esc_html( $hostney_mc_stats['hit_ratio'] ); ?>%</strong></td>
+                            <td><strong><?php echo esc_html( $hostney_oc_stats['hit_ratio'] ); ?>%</strong></td>
                         </tr>
                         <tr>
                             <td>Memory</td>
                             <td>
                                 <strong>
-                                    <?php echo esc_html( $hostney_mc->format_bytes( $hostney_mc_stats['memory_used'] ) ); ?>
+                                    <?php echo esc_html( $hostney_oc_active->format_bytes( $hostney_oc_stats['memory_used'] ) ); ?>
                                 </strong>
-                                / <?php echo esc_html( $hostney_mc->format_bytes( $hostney_mc_stats['memory_limit'] ) ); ?>
+                                <?php
+                                // A limit of 0 means "unlimited" to both engines, so rendering it
+                                // as "/ 0 B" would read as a full cache rather than an unbounded one.
+                                if ( $hostney_oc_stats['memory_limit'] > 0 ) {
+                                    echo ' / ' . esc_html( $hostney_oc_active->format_bytes( $hostney_oc_stats['memory_limit'] ) );
+                                }
+                                ?>
                             </td>
                         </tr>
                         <tr>
                             <td>Cached items</td>
-                            <td><strong><?php echo esc_html( number_format_i18n( $hostney_mc_stats['items'] ) ); ?></strong></td>
+                            <td><strong><?php echo esc_html( number_format_i18n( $hostney_oc_stats['items'] ) ); ?></strong></td>
                         </tr>
                         <tr>
                             <td>Uptime</td>
-                            <td><?php echo esc_html( $hostney_mc->format_uptime( $hostney_mc_stats['uptime'] ) ); ?></td>
+                            <td><?php echo esc_html( $hostney_oc_active->format_uptime( $hostney_oc_stats['uptime'] ) ); ?></td>
                         </tr>
                     <?php endif; ?>
                 </table>
 
                 <div class="hostney-btn-group">
-                    <button id="hostney-memcached-flush-btn" class="hostney-btn hostney-btn-primary">Flush object cache</button>
-                    <?php if ( $hostney_mc_dropin === 'not_installed' ) : ?>
+                    <button id="hostney-object-cache-flush-btn" class="hostney-btn hostney-btn-primary">Flush object cache</button>
+                    <?php if ( $hostney_oc_dropin === 'not_installed' ) : ?>
                         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
                             <?php wp_nonce_field( 'hostney_dropin_action', '_hostney_nonce' ); ?>
-                            <input type="hidden" name="action" value="hostney_memcached_install_dropin">
+                            <input type="hidden" name="action" value="hostney_object_cache_install_dropin">
                             <button type="submit" class="hostney-btn hostney-btn-outline-neutral">Install drop-in</button>
                         </form>
-                    <?php elseif ( $hostney_mc_dropin === 'foreign' ) : ?>
+                    <?php elseif ( $hostney_oc_dropin === 'foreign' ) : ?>
                         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
                             <?php wp_nonce_field( 'hostney_dropin_action', '_hostney_nonce' ); ?>
-                            <input type="hidden" name="action" value="hostney_memcached_install_dropin">
+                            <input type="hidden" name="action" value="hostney_object_cache_install_dropin">
                             <input type="hidden" name="force" value="1">
                             <button type="submit" class="hostney-btn hostney-btn-outline-neutral">Replace drop-in</button>
                         </form>
-                    <?php elseif ( $hostney_mc_dropin === 'installed' ) : ?>
+                    <?php elseif ( $hostney_oc_dropin === 'installed' ) : ?>
                         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
                             <?php wp_nonce_field( 'hostney_dropin_action', '_hostney_nonce' ); ?>
-                            <input type="hidden" name="action" value="hostney_memcached_remove_dropin">
+                            <input type="hidden" name="action" value="hostney_object_cache_remove_dropin">
                             <button type="submit" class="hostney-btn hostney-btn-outline-neutral">Remove drop-in</button>
                         </form>
                     <?php endif; ?>
                 </div>
 
-            <?php elseif ( $hostney_mc_extension ) : ?>
+            <?php elseif ( $hostney_oc_installable ) : ?>
                 <span class="hostney-status-badge hostney-status-badge-warn">Not connected</span>
                 <h2>Object cache</h2>
-                <p>Memcached service is not running. Enable it from your <strong>Hostney control panel</strong> to activate object caching.</p>
+                <p>
+                    No object cache is running for this account. Enable
+                    <strong>Redis</strong> or <strong>Memcached</strong> from your
+                    <strong>Hostney control panel</strong> to activate object caching.
+                    Your account runs one or the other, not both.
+                </p>
 
                 <table class="hostney-checks-table">
                     <tr>
                         <td>PHP extension</td>
-                        <td><span class="hostney-check-pass">Loaded</span></td>
+                        <td><span class="hostney-check-pass"><?php echo esc_html( $hostney_oc_label ); ?> loaded</span></td>
                     </tr>
                     <tr>
                         <td>Service</td>
@@ -193,17 +221,17 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                     </tr>
                     <tr>
                         <td>Socket</td>
-                        <td><?php echo esc_html( $hostney_mc_socket ); ?></td>
+                        <td><?php echo esc_html( $hostney_oc_socket ); ?></td>
                     </tr>
                 </table>
 
             <?php else : ?>
                 <span class="hostney-status-badge hostney-status-badge-inactive">Not available</span>
                 <h2>Object cache</h2>
-                <p>The PHP Memcached extension is not available on this server.</p>
+                <p>Neither the Redis nor the Memcached PHP extension is available on this server.</p>
             <?php endif; ?>
 
-            <div id="hostney-memcached-feedback" style="display: none;"></div>
+            <div id="hostney-object-cache-feedback" style="display: none;"></div>
         </div>
 
         <!-- Card 3: Purge cache -->
