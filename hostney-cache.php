@@ -3,7 +3,7 @@
  * Plugin Name: Hostney Cache
  * Plugin URI: https://www.hostney.com
  * Description: Automatic nginx page cache and Redis or Memcached object cache management for Hostney hosting.
- * Version: 1.2.0
+ * Version: 1.2.1
  * Author: Hostney
  * Author URI: https://www.hostney.com
  * License: GPL v2 or later
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'HOSTNEY_CACHE_VERSION', '1.2.0' );
+define( 'HOSTNEY_CACHE_VERSION', '1.2.1' );
 define( 'HOSTNEY_CACHE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'HOSTNEY_CACHE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
@@ -65,6 +65,29 @@ class Hostney_Cache {
 
         register_activation_hook( __FILE__, array( $this, 'activate' ) );
         register_deactivation_hook( __FILE__, array( $this, 'deactivate' ) );
+
+        // ⚠ NOT register_activation_hook. Updating this plugin does not run
+        // activation: the Hostney discovery worker `rm -rf`s the plugin
+        // directory and then installs and activates, so deactivate() never runs
+        // either, and activate() only checks the PHP version. Before 1.2.1 that
+        // meant a plugin update NEVER replaced wp-content/object-cache.php - a
+        // site upgraded from 1.1.0 kept a Memcached-only drop-in and lost its
+        // object cache silently the moment the account switched to Redis.
+        //
+        // Hooked on every request, not admin_init, because a site whose owner
+        // never opens wp-admin is exactly the one that would stay broken.
+        // maybe_upgrade() is one autoloaded option read when there is nothing
+        // to do, which is every request but the first after an upgrade.
+        add_action( 'plugins_loaded', array( $this, 'maybe_upgrade_dropin' ) );
+    }
+
+    /**
+     * Repair a drop-in left behind by an older version. See
+     * Hostney_Cache_Dropin::maybe_upgrade() for what it will and will not touch.
+     */
+    public function maybe_upgrade_dropin() {
+        $dropin = new Hostney_Cache_Dropin();
+        $dropin->maybe_upgrade();
     }
 
     /**
@@ -74,6 +97,31 @@ class Hostney_Cache {
         if ( version_compare( PHP_VERSION, '7.4', '<' ) ) {
             deactivate_plugins( plugin_basename( __FILE__ ) );
             wp_die( 'Hostney Cache requires PHP 7.4 or later.' );
+        }
+
+        // Install the drop-in if the slot is free.
+        //
+        // ⚠⚠ THIS IS THE OTHER HALF OF THE 1.2.1 FIX, and it was the more
+        // embarrassing half. deactivate() has always REMOVED the drop-in, while
+        // activate() never installed one - so the plugin could take the file
+        // away but never put it back, and the only thing that ever created it
+        // was a button in wp-admin. A customer who enabled Redis in the control
+        // panel got a plugin that was installed, activated, reporting healthy,
+        // and not actually caching anything, with no way to know that from the
+        // panel. The two hooks are symmetric now, which is what they always
+        // should have been.
+        //
+        // Installing before an engine is running is FINE and is why there is no
+        // check for one here: the drop-in probes for a socket per request and
+        // falls back to a non-persistent array when it finds none. So a site can
+        // be activated today and have Redis switched on next week with nothing
+        // to do on the site side - which is the whole promise of the feature.
+        //
+        // NEVER OVER A FOREIGN DROP-IN. install() refuses without $force, and
+        // nothing here passes it. A site running Object Cache Pro keeps it.
+        $dropin = new Hostney_Cache_Dropin();
+        if ( $dropin->get_status() === 'not_installed' ) {
+            $dropin->install();
         }
     }
 

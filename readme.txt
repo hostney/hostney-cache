@@ -4,7 +4,7 @@ Tags: cache, nginx, redis, memcached, performance
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.2.0
+Stable tag: 1.2.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,11 @@ The drop-in this plugin installs detects which engine is running on every reques
 This plugin is automatically installed on Hostney hosting accounts. No manual installation is required.
 
 == Changelog ==
+
+= 1.2.1 =
+* The object cache drop-in now updates itself when the plugin updates. Before this, updating the plugin left wp-content/object-cache.php untouched, so a site upgraded from 1.1.0 kept a Memcached-only drop-in and would have silently lost its object cache if the account switched to Redis
+* The drop-in is stamped with the plugin version, and the admin page reports an out-of-date one instead of showing it as current
+* Activating the plugin now installs the drop-in when nothing else owns the object-cache.php slot. Deactivating has always removed it, so the plugin could take the file away but never put it back - the only thing that created one was a button in the admin page
 
 = 1.2.0 =
 * Object cache now supports Redis as well as Memcached

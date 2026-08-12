@@ -31,6 +31,12 @@ $hostney_oc_active      = $hostney_oc->active_backend();
 $hostney_oc_installable = $hostney_oc_active ? $hostney_oc_active : $hostney_oc->installable_backend();
 $hostney_oc_stats       = $hostney_oc_active ? $hostney_oc_active->get_stats() : null;
 $hostney_oc_dropin      = $hostney_oc->dropin()->get_status();
+
+// ⚠ 'outdated' WAS ADDED IN 1.2.1 AND IS STILL A WORKING DROP-IN. Every check
+// that used to ask "=== 'installed'" to mean "we have a drop-in" must ask this
+// instead, or a stale one is reported as "not installed" - which is both wrong
+// and the opposite of reassuring, since the site IS caching.
+$hostney_oc_dropin_ours = in_array( $hostney_oc_dropin, array( 'installed', 'outdated' ), true );
 $hostney_oc_label       = $hostney_oc_installable ? $hostney_oc_installable->get_label() : 'Object cache';
 $hostney_oc_socket      = $hostney_oc_installable ? $hostney_oc_installable->get_socket_path() : '';
 
@@ -50,6 +56,25 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
         <div class="notice notice-success is-dismissible"><p><?php echo esc_html( $hostney_notice_msg ); ?></p></div>
     <?php elseif ( $hostney_notice_type === 'dropin-error' ) : ?>
         <div class="notice notice-error is-dismissible"><p><?php echo esc_html( $hostney_notice_msg ); ?></p></div>
+    <?php endif; ?>
+
+    <?php
+    // Normally unreachable: the drop-in rewrites itself on the first request
+    // after a plugin update. Seeing this means the rewrite FAILED, and the only
+    // realistic cause is wp-content not being writable - so the message names
+    // that rather than saying "out of date" and leaving the reader to guess.
+    // Worth stating the consequence: a stale drop-in keeps working on the engine
+    // it knows and goes quiet on the other one.
+    ?>
+    <?php if ( $hostney_oc_dropin === 'outdated' ) : ?>
+        <div class="notice notice-warning">
+            <p>
+                <strong>The object cache drop-in is out of date.</strong>
+                It should have updated itself, so <code>wp-content/</code> is most likely not writable.
+                Until it is updated this site keeps using the older drop-in, which may not support the
+                object cache engine your account is running.
+            </p>
+        </div>
     <?php endif; ?>
 
     <div id="hostney-cache-container">
@@ -92,7 +117,7 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                 <tr>
                     <td>Object caching</td>
                     <td>
-                        <?php if ( $hostney_oc_active && $hostney_oc_dropin === 'installed' ) : ?>
+                        <?php if ( $hostney_oc_active && $hostney_oc_dropin_ours ) : ?>
                             <span class="hostney-check-pass">Active (<?php echo esc_html( $hostney_oc_active->get_label() ); ?>)</span>
                         <?php elseif ( $hostney_oc_active ) : ?>
                             <span class="hostney-check-warn">Available (drop-in not installed)</span>
@@ -138,6 +163,8 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                         <td>
                             <?php if ( $hostney_oc_dropin === 'installed' ) : ?>
                                 <span class="hostney-check-pass">Installed</span>
+                            <?php elseif ( $hostney_oc_dropin === 'outdated' ) : ?>
+                                <span class="hostney-check-warn">Installed, update pending</span>
                             <?php elseif ( $hostney_oc_dropin === 'foreign' ) : ?>
                                 <span class="hostney-check-warn">Foreign (not managed by Hostney)</span>
                             <?php else : ?>
@@ -190,6 +217,17 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                             <input type="hidden" name="action" value="hostney_object_cache_install_dropin">
                             <input type="hidden" name="force" value="1">
                             <button type="submit" class="hostney-btn hostney-btn-outline-neutral">Replace drop-in</button>
+                        </form>
+                    <?php elseif ( $hostney_oc_dropin === 'outdated' ) : ?>
+                        <?php
+                        // No force flag: the file is already ours, so install()
+                        // overwrites it without one. force exists to overwrite
+                        // ANOTHER plugin's drop-in, which this is not.
+                        ?>
+                        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
+                            <?php wp_nonce_field( 'hostney_dropin_action', '_hostney_nonce' ); ?>
+                            <input type="hidden" name="action" value="hostney_object_cache_install_dropin">
+                            <button type="submit" class="hostney-btn hostney-btn-primary">Update drop-in</button>
                         </form>
                     <?php elseif ( $hostney_oc_dropin === 'installed' ) : ?>
                         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">

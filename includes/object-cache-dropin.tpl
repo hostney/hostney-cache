@@ -9,7 +9,19 @@
  * chosen AT RUNTIME by probing for each engine's socket, so switching engines
  * in the Hostney control panel needs no change here and no action on the site.
  *
- * @version 1.2.0
+ * @version {{HOSTNEY_CACHE_VERSION}}
+ *
+ * ⚠⚠ THE @version LINE ABOVE MUST STAY NEAR THE TOP OF THIS FILE, and nothing
+ * long may be inserted above it. Hostney_Cache_Dropin::get_version() reads only
+ * the first bytes of the installed drop-in rather than pulling ~20 KB into
+ * memory, so a header that grows past that window makes the version unreadable
+ * - and an unreadable version reads as "stale", which puts a permanent and
+ * false "update pending" warning on the admin page of every site. This was
+ * caught exactly once, by adding four lines of comment here.
+ *
+ * ⚠ The placeholder is substituted as this file is written. Do not replace it
+ * with a literal version: the plugin constant is the only place a version is
+ * bumped, and a hardcoded one here would silently drift out of step with it.
  */
 
 /* Hostney Cache Drop-in */
