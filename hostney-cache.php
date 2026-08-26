@@ -3,7 +3,7 @@
  * Plugin Name: Hostney Cache
  * Plugin URI: https://www.hostney.com
  * Description: Automatic nginx page cache and Redis or Memcached object cache management for Hostney hosting.
- * Version: 1.2.1
+ * Version: 1.2.2
  * Author: Hostney
  * Author URI: https://www.hostney.com
  * License: GPL v2 or later
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'HOSTNEY_CACHE_VERSION', '1.2.1' );
+define( 'HOSTNEY_CACHE_VERSION', '1.2.2' );
 define( 'HOSTNEY_CACHE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'HOSTNEY_CACHE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
@@ -26,6 +26,7 @@ define( 'HOSTNEY_CACHE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 // engines that extend it, and both engines before the resolver that instantiates
 // them. There is no autoloader here.
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-purger.php';
+require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-warmer.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-hooks.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-admin.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-backend.php';
@@ -51,11 +52,18 @@ class Hostney_Cache {
     private function __construct() {
         $purger       = new Hostney_Cache_Purger();
         $object_cache = new Hostney_Cache_Object_Cache();
+        $warmer       = new Hostney_Cache_Warmer( $purger );
 
         new Hostney_Cache_Hooks( $purger );
 
+        // ⚠ OUTSIDE the is_admin() branch below, deliberately. The warm-up runs
+        // on WP-Cron, and cron fires on the FRONT END — registering its hook
+        // only for admin requests would mean the one request type that never
+        // runs it is the only one that knows about it.
+        $warmer->register();
+
         if ( is_admin() || ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ) {
-            new Hostney_Cache_Admin( $purger, $object_cache );
+            new Hostney_Cache_Admin( $purger, $object_cache, $warmer );
         }
 
         // Admin bar is available on both admin and frontend
@@ -130,6 +138,13 @@ class Hostney_Cache {
      */
     public function deactivate() {
         delete_option( 'hostney_cache_log' );
+
+        // A queued warm-up outlives the plugin otherwise: the cron event stays
+        // in the schedule, fires with no handler registered, and the admin page
+        // comes back next activation still claiming a run is in progress.
+        wp_clear_scheduled_hook( Hostney_Cache_Warmer::CRON_HOOK );
+        delete_option( Hostney_Cache_Warmer::STATE_OPTION );
+        delete_option( Hostney_Cache_Warmer::QUEUE_OPTION );
 
         // Remove our object cache drop-in, and only ours. Leaving it behind
         // would be worse than removing it: object-cache.php keeps loading after

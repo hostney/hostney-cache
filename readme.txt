@@ -4,7 +4,7 @@ Tags: cache, nginx, redis, memcached, performance
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.2.1
+Stable tag: 1.2.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -19,6 +19,7 @@ Hostney Cache manages both caching layers on a Hostney site: it purges the nginx
 * Automatic cache purge on post publish, update, trash, and restore
 * Automatic cache purge on taxonomy and comment changes
 * Manual "Purge all cache" button in admin bar and admin page
+* "Flush and pre-fetch" button that clears the cache and then warms it back up in the background
 * Per-page "Purge cache for this page" button in the post editor
 * Object caching via Redis or Memcached, whichever the account is running
 * Activity log showing recent purge operations
@@ -34,7 +35,21 @@ The drop-in this plugin installs detects which engine is running on every reques
 
 This plugin is automatically installed on Hostney hosting accounts. No manual installation is required.
 
+== Flush and pre-fetch ==
+
+Purging the cache is instant, but it leaves the next visitor to each page waiting while it is rendered again. On a site with a few hundred pages that is a slow half hour for whoever happens to arrive first.
+
+"Flush and pre-fetch" clears the page cache and then requests every public page once, so the cache is full again before anyone asks for it. Useful after a theme change, a bulk edit, or a plugin update that touches the front end.
+
+It runs in the background, **one page at a time**. A hosting account has a small, fixed number of PHP workers, and warming is by definition a stream of uncached requests - so a fast warm-up would slow the site down for real visitors while claiming to speed it up. Progress is shown on the plugin page and you can leave and come back to it.
+
 == Changelog ==
+
+= 1.2.2 =
+* New "Flush and pre-fetch" button: clears the page cache and then warms it back up in the background, with a progress bar on the plugin page
+* Warming runs one page at a time so it never competes with real visitors for the site's PHP workers
+* Requests go through the local nginx rather than the public hostname, so a site behind a CDN warms its own origin cache rather than an edge node
+* If a whole run comes back with no page-cache header, the result says page caching looks switched off rather than reporting pages as warmed
 
 = 1.2.1 =
 * The object cache drop-in now updates itself when the plugin updates. Before this, updating the plugin left wp-content/object-cache.php untouched, so a site upgraded from 1.1.0 kept a Memcached-only drop-in and would have silently lost its object cache if the account switched to Redis

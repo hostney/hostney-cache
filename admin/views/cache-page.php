@@ -282,7 +282,50 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
             <div id="hostney-purge-feedback" style="display: none;"></div>
         </div>
 
-        <!-- Card 4: Recent activity -->
+        <!-- Card 4: Flush and pre-fetch -->
+        <div class="hostney-card">
+            <h2>Flush and pre-fetch</h2>
+            <p>
+                Clear the page cache and then visit every public page once, so the cache is already
+                full before your visitors arrive. Useful after a theme change or a bulk edit, when a
+                plain purge would leave the next visitor to each page waiting for it to be rendered.
+            </p>
+            <p>
+                This runs in the background, one page at a time, so it never competes with real
+                visitors for this site&rsquo;s PHP workers. That makes it deliberately unhurried &mdash;
+                a few hundred pages takes tens of minutes. You can leave this page; the run carries on
+                and the progress comes back when you return.
+            </p>
+
+            <?php if ( ! $hostney_cache_endpoint_reachable ) : ?>
+                <?php
+                // Without page caching there is nothing to fill: every page
+                // would be rendered and immediately thrown away. Better to say
+                // so than to let somebody run it and wonder why the site is no
+                // faster afterwards.
+                ?>
+                <p class="hostney-check-warn" style="margin-bottom:0;">
+                    Page caching is not enabled for this site, so there is nothing to pre-fetch into.
+                </p>
+            <?php else : ?>
+                <div class="hostney-btn-group">
+                    <button id="hostney-warm-start-btn" class="hostney-btn hostney-btn-primary">Flush and pre-fetch</button>
+                    <button id="hostney-warm-stop-btn" class="hostney-btn hostney-btn-outline-neutral" style="display:none;">Stop</button>
+                </div>
+
+                <div id="hostney-warm-progress" style="display:none;">
+                    <div class="hostney-progress-track">
+                        <div class="hostney-progress-bar" id="hostney-warm-bar" style="width:0%;"></div>
+                    </div>
+                    <p class="hostney-progress-label" id="hostney-warm-label"></p>
+                    <p class="hostney-progress-current" id="hostney-warm-current"></p>
+                </div>
+
+                <div id="hostney-warm-feedback" style="display: none;"></div>
+            <?php endif; ?>
+        </div>
+
+        <!-- Card 5: Recent activity -->
         <div class="hostney-card">
             <h2>Recent activity</h2>
 

@@ -21,6 +21,7 @@ The plugin communicates with nginx through a local endpoint (`/.well-known/hostn
 - **Prefix purging** — archive pages are purged by path prefix to cover paginated pages
 - **Batch overflow protection** — if more than 15 URLs are queued, falls back to a full cache clear instead of hammering nginx with individual requests
 - **Gutenberg debounce** — handles Gutenberg's concurrent save requests without triggering duplicate purges
+- **Flush and pre-fetch** — clears the page cache and then warms it back up in the background, one page at a time, with a progress bar on the plugin page
 - **Admin page** — status overview, manual purge button, and activity log
 - **Admin bar button** — "Hostney: Purge cache" available on both admin and frontend
 - **Post editor meta box** — "Purge cache for this page" button on every public post type
@@ -70,6 +71,18 @@ Worker API (127.0.0.1:4000)
 Nginx cache files (deleted from disk)
 ```
 
+## Flush and pre-fetch
+
+Purging is instant but leaves the next visitor to each page waiting for it to render again. "Flush and pre-fetch" clears the cache and then requests every public URL once so the cache is full before anyone asks.
+
+- Runs on WP-Cron in time-boxed batches, **strictly one request at a time**. A Hostney site gets five PHP-FPM children and every warm request is a full uncached render, so anything parallel would slow the site down for real visitors while claiming to speed it up.
+- Requests go to `127.0.0.1` with a `Host` header, exactly like the purger. PHP-FPM runs with `--network host` so that really is the nginx holding this site's cache; the public hostname would warm a CDN edge instead, and might never reach this origin. The private source address also means `is_server_ip()` passes the request at step 1 of the bot chain, so it can never be handed a challenge — a challenge page written into the page cache would then be served to every visitor.
+- The admin page's progress poll also nudges cron. A fully cached site has very little traffic reaching PHP, which is exactly the site somebody just asked to warm, so without the nudge the run would barely move while being watched. Closing the tab only stops the nudging; the run continues on the next request the site serves.
+- URLs with a query string are skipped — they bypass the cache on the default Hostney configuration, so warming one renders a page and stores nothing.
+- If a whole run comes back without a page-cache header, the result says page caching looks switched off rather than reporting pages as warmed.
+
+Filters: `hostney_cache_warm_max_urls` (default 500), `hostney_cache_warm_urls`, `hostney_cache_warm_delay_ms` (default 200), `hostney_cache_warm_batch_seconds` (default 20).
+
 ## File structure
 
 ```
@@ -78,6 +91,7 @@ hostney-cache/
 ├── readme.txt                               # WordPress Plugin Check metadata
 ├── includes/
 │   ├── class-hostney-cache-purger.php       # URL collection, dedup, HTTP calls, logging
+│   ├── class-hostney-cache-warmer.php       # Flush and pre-fetch: URL list, cron batches, run state
 │   ├── class-hostney-cache-hooks.php        # WordPress hook registrations
 │   └── class-hostney-cache-admin.php        # Admin page, meta box, AJAX handlers
 └── admin/

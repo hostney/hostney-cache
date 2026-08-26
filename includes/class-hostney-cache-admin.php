@@ -17,9 +17,13 @@ class Hostney_Cache_Admin {
     /** @var Hostney_Cache_Object_Cache */
     private $object_cache;
 
-    public function __construct( Hostney_Cache_Purger $purger, Hostney_Cache_Object_Cache $object_cache ) {
+    /** @var Hostney_Cache_Warmer */
+    private $warmer;
+
+    public function __construct( Hostney_Cache_Purger $purger, Hostney_Cache_Object_Cache $object_cache, Hostney_Cache_Warmer $warmer ) {
         $this->purger       = $purger;
         $this->object_cache = $object_cache;
+        $this->warmer       = $warmer;
 
         add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
@@ -29,6 +33,11 @@ class Hostney_Cache_Admin {
         add_action( 'wp_ajax_hostney_cache_purge_all', array( $this, 'ajax_purge_all' ) );
         add_action( 'wp_ajax_hostney_cache_purge_post', array( $this, 'ajax_purge_post' ) );
         add_action( 'wp_ajax_hostney_cache_clear_log', array( $this, 'ajax_clear_log' ) );
+
+        // AJAX handlers — flush and pre-fetch
+        add_action( 'wp_ajax_hostney_cache_warm_start', array( $this, 'ajax_warm_start' ) );
+        add_action( 'wp_ajax_hostney_cache_warm_status', array( $this, 'ajax_warm_status' ) );
+        add_action( 'wp_ajax_hostney_cache_warm_stop', array( $this, 'ajax_warm_stop' ) );
 
         // AJAX handler — object cache flush (whichever engine is running)
         //
@@ -187,6 +196,65 @@ class Hostney_Cache_Admin {
 
         delete_option( 'hostney_cache_log' );
         wp_send_json_success( array( 'message' => 'Log cleared.' ) );
+    }
+
+    /**
+     * AJAX: Flush the page cache, then start warming it in the background.
+     */
+    public function ajax_warm_start() {
+        check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
+        }
+
+        $result = $this->warmer->start();
+
+        // The state goes back with both outcomes so the browser can render the
+        // bar without a second round trip, and so a refusal ("already running")
+        // shows the run it is refusing to duplicate.
+        $result['state'] = $this->warmer->get_state();
+
+        if ( ! empty( $result['success'] ) ) {
+            wp_send_json_success( $result );
+        }
+        wp_send_json_error( $result );
+    }
+
+    /**
+     * AJAX: Progress of the current or last warm-up.
+     *
+     * ⚠ This also NUDGES cron. WP-Cron rides on real traffic, and a site that
+     * is fully cached has very little of it reaching PHP — so while somebody
+     * watches the progress bar, this poll is what keeps the run moving. Drop
+     * the nudge and the bar sits still on exactly the sites the feature is for.
+     */
+    public function ajax_warm_status() {
+        check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
+        }
+
+        $this->warmer->nudge();
+
+        wp_send_json_success( array( 'state' => $this->warmer->get_state() ) );
+    }
+
+    /**
+     * AJAX: Cancel a running warm-up.
+     */
+    public function ajax_warm_stop() {
+        check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
+        }
+
+        $result          = $this->warmer->stop();
+        $result['state'] = $this->warmer->get_state();
+
+        wp_send_json_success( $result );
     }
 
     /**
