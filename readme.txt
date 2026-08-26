@@ -18,6 +18,7 @@ Hostney Cache manages both caching layers on a Hostney site: it purges the nginx
 
 * Automatic cache purge on post publish, update, trash, and restore
 * Automatic cache purge on taxonomy and comment changes
+* Hostney Cache menu in the admin bar with Purge cache, Flush and pre-fetch, and Cache settings
 * Manual "Purge all cache" button in admin bar and admin page
 * "Flush and pre-fetch" button that clears the cache and then warms it back up in the background
 * Per-page "Purge cache for this page" button in the post editor
@@ -46,6 +47,7 @@ It runs in the background, **one page at a time**. A hosting account has a small
 == Changelog ==
 
 = 1.2.2 =
+* The admin bar item is now a menu: Purge cache, Flush and pre-fetch, and Cache settings, reachable from any page on the site. While a pre-fetch is running the menu label carries its progress
 * New "Flush and pre-fetch" button: clears the page cache and then warms it back up in the background, with a progress bar on the plugin page
 * Warming runs one page at a time so it never competes with real visitors for the site's PHP workers
 * Requests go through the local nginx rather than the public hostname, so a site behind a CDN warms its own origin cache rather than an edge node

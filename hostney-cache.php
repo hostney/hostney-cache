@@ -42,6 +42,9 @@ class Hostney_Cache {
 
     private static $instance = null;
 
+    /** @var Hostney_Cache_Warmer Needed on the front end too: the admin bar reports run progress. */
+    private $warmer;
+
     public static function get_instance() {
         if ( null === self::$instance ) {
             self::$instance = new self();
@@ -53,6 +56,8 @@ class Hostney_Cache {
         $purger       = new Hostney_Cache_Purger();
         $object_cache = new Hostney_Cache_Object_Cache();
         $warmer       = new Hostney_Cache_Warmer( $purger );
+
+        $this->warmer = $warmer;
 
         new Hostney_Cache_Hooks( $purger );
 
@@ -176,20 +181,73 @@ class Hostney_Cache {
     }
 
     /**
-     * Add "Purge cache" button to admin bar
+     * Add the Hostney Cache menu to the admin bar.
+     *
+     * Was a single "Hostney: Purge cache" node that purged on click. It is a
+     * parent with children now, so pre-fetch and the settings page are reachable
+     * from any page on the site instead of only from wp-admin.
+     *
+     * ⚠ THE PURGE CHILD KEEPS THE id 'hostney-cache-purge'. admin/js/cache.js
+     * finds it by the DOM id WordPress derives from that
+     * ('wp-admin-bar-hostney-cache-purge') to swap its label while working.
+     * Renaming the node silently turns that feedback off - the purge still
+     * fires, the menu item just never says anything.
      */
     public function add_admin_bar_button( $wp_admin_bar ) {
         if ( ! current_user_can( 'manage_options' ) ) {
             return;
         }
 
+        $settings_url = admin_url( 'admin.php?page=hostney-cache' );
+
+        // Show live progress in the parent label while a pre-fetch is running,
+        // so "is it still going?" is answerable without opening the page.
+        //
+        // This costs one non-autoloaded option read per render. It is only paid
+        // by logged-in administrators with the toolbar showing, whose requests
+        // skip the page cache anyway, so it never touches a cached page view.
+        $title = 'Hostney Cache';
+        $state = $this->warmer->get_state();
+        if ( $state['status'] === 'running' && (int) $state['total'] > 0 ) {
+            $percent = (int) round( ( (int) $state['done'] / (int) $state['total'] ) * 100 );
+            $title  .= ' &middot; pre-fetching ' . $percent . '%';
+        }
+
         $wp_admin_bar->add_node( array(
-            'id'    => 'hostney-cache-purge',
-            'title' => 'Hostney: Purge cache',
-            'href'  => '#',
-            'meta'  => array(
+            'id'    => 'hostney-cache',
+            'title' => $title,
+            // The parent leads to the settings page rather than being inert:
+            // on touch devices a submenu parent with href="#" is a dead tap.
+            'href'  => $settings_url,
+        ) );
+
+        $wp_admin_bar->add_node( array(
+            'parent' => 'hostney-cache',
+            'id'     => 'hostney-cache-purge',
+            'title'  => 'Purge cache',
+            'href'   => '#',
+            'meta'   => array(
                 'onclick' => 'hostneyAdminBarPurge(event);return false;',
             ),
+        ) );
+
+        $wp_admin_bar->add_node( array(
+            'parent' => 'hostney-cache',
+            'id'     => 'hostney-cache-warm',
+            'title'  => 'Flush and pre-fetch',
+            'href'   => '#',
+            'meta'   => array(
+                'onclick' => 'hostneyAdminBarWarm(event);return false;',
+            ),
+        ) );
+
+        $wp_admin_bar->add_node( array(
+            'parent' => 'hostney-cache',
+            'id'     => 'hostney-cache-settings',
+            // Named for where it goes, and it is where the progress bar lives -
+            // which is what somebody who just started a pre-fetch wants next.
+            'title'  => 'Cache settings',
+            'href'   => $settings_url,
         ) );
     }
 

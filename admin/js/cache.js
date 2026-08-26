@@ -296,18 +296,76 @@
 })(jQuery);
 
 /**
+ * Swap an admin bar item's label while something is happening to it, then put
+ * it back. Shared by the two admin bar actions.
+ *
+ * ⚠ The node id here is the one passed to add_node(); WordPress prefixes it
+ * with 'wp-admin-bar-' in the DOM. Rename a node without renaming it here and
+ * the action still fires - it just goes silent, which reads as a broken button.
+ *
+ * @param {string} nodeId
+ * @returns {{set: function(string), restore: function()}|null}
+ */
+function hostneyAdminBarLabel(nodeId) {
+    var item = document.getElementById('wp-admin-bar-' + nodeId);
+    if (!item) return null;
+
+    var titleEl = item.querySelector('.ab-item');
+    if (!titleEl) return null;
+
+    var original = titleEl.textContent;
+    return {
+        set: function (text) { titleEl.textContent = text; },
+        restore: function () { titleEl.textContent = original; }
+    };
+}
+
+/**
+ * Admin bar "Flush and pre-fetch" handler (called from onclick attribute).
+ *
+ * Starts the run and gets out of the way. There is no progress bar out here -
+ * the label says it started, and "Cache settings" in the same menu is where
+ * the progress lives. The parent label also carries a percentage while a run
+ * is in flight, so the next page load shows how far along it is.
+ */
+function hostneyAdminBarWarm(e) {
+    e.preventDefault();
+
+    var label = hostneyAdminBarLabel('hostney-cache-warm');
+    if (label) label.set('Starting...');
+
+    jQuery.ajax({
+        url: hostneyCache.ajaxUrl,
+        type: 'POST',
+        data: {
+            action: 'hostney_cache_warm_start',
+            nonce: hostneyCache.nonce
+        },
+        success: function (response) {
+            if (!label) return;
+            // A refusal here is almost always "already running", which is
+            // information rather than a failure - so it gets its own text
+            // instead of a generic error.
+            var payload = response.data || {};
+            label.set(response.success ? 'Pre-fetch started' : (payload.message || 'Could not start'));
+            setTimeout(label.restore, 3000);
+        },
+        error: function () {
+            if (!label) return;
+            label.set('Could not start');
+            setTimeout(label.restore, 3000);
+        }
+    });
+}
+
+/**
  * Admin bar purge handler (called from onclick attribute)
  */
 function hostneyAdminBarPurge(e) {
     e.preventDefault();
 
-    var link = document.getElementById('wp-admin-bar-hostney-cache-purge');
-    if (!link) return;
-
-    var titleEl = link.querySelector('.ab-item');
-    var originalText = titleEl ? titleEl.textContent : 'Purge cache';
-
-    if (titleEl) titleEl.textContent = 'Purging...';
+    var label = hostneyAdminBarLabel('hostney-cache-purge');
+    if (label) label.set('Purging...');
 
     jQuery.ajax({
         url: hostneyCache.ajaxUrl,
@@ -317,16 +375,14 @@ function hostneyAdminBarPurge(e) {
             nonce: hostneyCache.nonce
         },
         success: function (response) {
-            if (titleEl) {
-                titleEl.textContent = response.success ? 'Cache purged!' : 'Purge failed';
-                setTimeout(function () { titleEl.textContent = originalText; }, 2000);
-            }
+            if (!label) return;
+            label.set(response.success ? 'Cache purged!' : 'Purge failed');
+            setTimeout(label.restore, 2000);
         },
         error: function () {
-            if (titleEl) {
-                titleEl.textContent = 'Purge failed';
-                setTimeout(function () { titleEl.textContent = originalText; }, 2000);
-            }
+            if (!label) return;
+            label.set('Purge failed');
+            setTimeout(label.restore, 2000);
         }
     });
 }

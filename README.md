@@ -23,7 +23,7 @@ The plugin communicates with nginx through a local endpoint (`/.well-known/hostn
 - **Gutenberg debounce** — handles Gutenberg's concurrent save requests without triggering duplicate purges
 - **Flush and pre-fetch** — clears the page cache and then warms it back up in the background, one page at a time, with a progress bar on the plugin page
 - **Admin page** — status overview, manual purge button, and activity log
-- **Admin bar button** — "Hostney: Purge cache" available on both admin and frontend
+- **Admin bar menu** — Purge cache, Flush and pre-fetch, and Cache settings, on both admin and frontend; the menu label carries pre-fetch progress while a run is in flight
 - **Post editor meta box** — "Purge cache for this page" button on every public post type
 
 ## Security
