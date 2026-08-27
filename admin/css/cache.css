@@ -1,487 +1,493 @@
-/* Hostney Cache Plugin - Admin Styles
- * Design tokens from Hostney control panel (IBM Plex Sans, Ellie orange palette)
+/* Hostney Cache - admin styles
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * These are the CONTROL PANEL's tokens, not approximations of them. Values are
+ * lifted from control_panel/frontend/src/styles/index.css and Button.jsx so a
+ * customer moving between the panel and this page sees one product:
+ *
+ *   border        #e2e2e2      (hostney-border)
+ *   card          #ffffff      (hostney-bg-card)
+ *   inset         #fbfbfb      (hostney-bg-inset)
+ *   soft          #f3f4f6      (hostney-bg-soft, gray-100)
+ *   brand         #ea580c      (tailwind.config.js `brand`)
+ *   primary       #2563eb      (blue-600, Button primary)
+ *   danger        #dc2626      (red-600, Button danger)
+ *
+ * ⚠ LIGHT ONLY, DELIBERATELY. The panel has a dark theme; wp-admin does not.
+ * A page that went dark on prefers-color-scheme would be the one dark rectangle
+ * inside an otherwise light WordPress admin, which reads as broken rather than
+ * as themed. If WordPress ever ships a real dark admin, this is where it goes.
+ *
+ * ⚠ EVERY RULE IS SCOPED to .hostney-page-heading or #hostney-cache-container.
+ * This stylesheet loads inside wp-admin, where an unscoped `table` or `.card`
+ * rule would restyle WordPress itself.
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 
-/* ─── Font ─── */
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
-/* ─── Reset WP admin defaults within our container ─── */
+#hostney-cache-container,
+.hostney-page-heading,
+.hostney-modal-backdrop {
+    --hny-border:   #e2e2e2;
+    --hny-card:     #ffffff;
+    --hny-inset:    #fbfbfb;
+    --hny-soft:     #f3f4f6;
+    --hny-brand:    #ea580c;
+    --hny-primary:  #2563eb;
+    --hny-primary-h:#1d4ed8;
+    --hny-danger:   #dc2626;
+    --hny-danger-h: #b91c1c;
+    --hny-ink:      #111827;
+    --hny-ink-soft: #4b5563;
+    --hny-ink-mute: #6b7280;
+    --hny-pass:     #15803d;
+    --hny-warn:     #b45309;
+    --hny-fail:     #b91c1c;
+    --hny-radius:   8px;
+}
+
 .hostney-page-heading,
 .hostney-page-heading *,
 #hostney-cache-container,
-#hostney-cache-container * {
+#hostney-cache-container *,
+.hostney-modal-backdrop,
+.hostney-modal-backdrop * {
     box-sizing: border-box;
     font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-#hostney-cache-container {
-    max-width: 680px;
+/* ─── Page heading: logo lockup ─────────────────────────────────────────── */
+
+.hostney-page-heading {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 16px 0 22px;
+    padding: 0 0 16px;
+    border-bottom: 1px solid var(--hny-border);
 }
 
-/* ─── Page heading ─── */
-.hostney-page-heading {
-    margin: 20px 0 24px;
-    padding: 0;
+/* The same mark as the control panel's side rail (components/layout/Logo.jsx),
+   inlined rather than linked so it needs no asset pipeline and cannot 404. */
+.hostney-logo {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    color: var(--hny-brand);
+    display: block;
 }
 
 .hostney-page-heading h1 {
     font-family: 'IBM Plex Sans', sans-serif !important;
-    font-size: 16px !important;
+    font-size: 17px !important;
     font-weight: 400 !important;
-    color: #16191f;
+    color: var(--hny-ink);
     margin: 0 !important;
     padding: 0 !important;
-    line-height: 1.3;
+    line-height: 1.25;
 }
 
-.hostney-brand {
-    font-weight: 700;
-    letter-spacing: 0.02em;
+.hostney-brand { font-weight: 700; letter-spacing: .01em; }
+.hostney-brand-subtitle { font-weight: 400; color: var(--hny-ink-mute); }
+
+/* ─── Full-width card grid ──────────────────────────────────────────────── */
+
+/* Was max-width: 680px, i.e. a single narrow column on a 2560px monitor with
+   the rest of the screen empty. auto-fit lets the browser decide how many
+   columns fit; align-items:start stops a short card stretching to match a tall
+   neighbour, which is what makes a grid of settings cards look like a table. */
+#hostney-cache-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+    gap: 20px;
+    align-items: start;
+    margin-right: 20px;
 }
 
-.hostney-brand-subtitle {
-    font-weight: 400;
-    color: #656871;
-}
-
-/* ─── Cards ─── */
 .hostney-card {
-    background: #fff;
-    border: 1px solid #e0e0e0;
-    border-radius: 10px;
-    padding: 24px 28px;
-    margin-bottom: 20px;
+    background: var(--hny-card);
+    border: 1px solid var(--hny-border);
+    border-radius: var(--hny-radius);
+    padding: 20px 22px;
+    margin: 0;
+}
+
+/* The status card leads the page, so it spans and carries the brand edge. */
+.hostney-card-accent {
+    grid-column: 1 / -1;
+    border-top: 3px solid var(--hny-brand);
 }
 
 .hostney-card h2 {
     margin: 0 0 6px;
     font-size: 15px;
     font-weight: 600;
-    color: #16191f;
-    letter-spacing: -0.01em;
+    color: var(--hny-ink);
+    line-height: 1.3;
 }
 
 .hostney-card > p {
     margin: 0 0 16px;
-    font-size: 13.5px;
-    color: #656871;
-    line-height: 1.5;
-}
-
-.hostney-card > p:last-child {
-    margin-bottom: 0;
-}
-
-/* ─── Buttons ─── */
-.hostney-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: 'IBM Plex Sans', sans-serif;
     font-size: 13px;
-    font-weight: 500;
-    padding: 8px 20px;
-    border-radius: 6px;
-    border: none;
-    cursor: pointer;
-    transition: background-color 0.15s, box-shadow 0.15s;
-    line-height: 1.4;
-    text-decoration: none;
+    line-height: 1.6;
+    color: var(--hny-ink-soft);
+    max-width: 68ch;
 }
 
-.hostney-btn:focus-visible {
-    outline: 2px solid #ff9500;
-    outline-offset: 2px;
-}
+/* ─── Status badges ─────────────────────────────────────────────────────── */
 
-.hostney-btn-primary {
-    background: #ff9500;
-    color: #fff;
-}
-
-.hostney-btn-primary:hover {
-    background: #e68600;
-}
-
-.hostney-btn-primary:active {
-    background: #cc7600;
-}
-
-.hostney-btn-primary:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-}
-
-.hostney-btn-outline-neutral {
-    background: transparent;
-    color: #656871;
-    border: 1px solid #d0d0d5;
-}
-
-.hostney-btn-outline-neutral:hover {
-    background: #f8f9fa;
-    color: #16191f;
-}
-
-/* ─── Alerts ─── */
-.hostney-error {
-    margin-top: 14px;
-    padding: 10px 14px;
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    border-radius: 6px;
-    color: #b91c1c;
-    font-size: 13px;
-    line-height: 1.5;
-}
-
-.hostney-success {
-    margin-top: 14px;
-    padding: 10px 14px;
-    background: #f0fdf4;
-    border: 1px solid #bbf7d0;
-    border-radius: 6px;
-    color: #15803d;
-    font-size: 13px;
-    line-height: 1.5;
-}
-
-/* ─── Status badge ─── */
 .hostney-status-badge {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 5px 12px;
-    border-radius: 20px;
-    font-size: 12.5px;
+    float: right;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
     font-weight: 500;
-    margin-bottom: 14px;
+    border: 1px solid transparent;
 }
-
-.hostney-status-badge-active {
-    background: #f0fdf4;
-    color: #15803d;
-    border: 1px solid #bbf7d0;
-}
-
-.hostney-status-badge-active::before {
+.hostney-status-badge::before {
     content: '';
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    background: #22c55e;
+    width: 6px; height: 6px;
     border-radius: 50%;
+    background: currentColor;
 }
+.hostney-status-badge-active   { color: var(--hny-pass); background: #eaf5ee; border-color: #cfe8d8; }
+.hostney-status-badge-warn     { color: var(--hny-warn); background: #fdf3e4; border-color: #f0dcbc; }
+.hostney-status-badge-inactive { color: var(--hny-ink-mute); background: var(--hny-soft); border-color: var(--hny-border); }
 
-/* ─── Status badge variants ─── */
-.hostney-status-badge-inactive {
-    background: #f3f4f6;
-    color: #6b7280;
-    border: 1px solid #e5e7eb;
-}
+/* ─── Definition tables ─────────────────────────────────────────────────── */
 
-.hostney-status-badge-warn {
-    background: #fffbeb;
-    color: #a16207;
-    border: 1px solid #fde68a;
-}
-
-.hostney-status-badge-warn::before {
-    content: '';
-    display: inline-block;
-    width: 7px;
-    height: 7px;
-    background: #f59e0b;
-    border-radius: 50%;
-}
-
-/* ─── Button group ─── */
-.hostney-btn-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 16px;
-}
-
-/* ─── Neutral check (no icon) ─── */
-.hostney-check-neutral {
-    color: #6b7280;
-}
-
-/* ─── System checks table ─── */
 .hostney-checks-table {
     width: 100%;
     border-collapse: collapse;
 }
-
 .hostney-checks-table td {
     padding: 10px 0;
-    border-bottom: 1px solid #f0f0f1;
+    border-bottom: 1px solid var(--hny-border);
     font-size: 13px;
-    vertical-align: middle;
+    vertical-align: top;
+    color: var(--hny-ink-soft);
 }
-
-.hostney-checks-table tr:last-child td {
-    border-bottom: none;
-}
-
+.hostney-checks-table tr:last-child td { border-bottom: none; }
 .hostney-checks-table td:first-child {
     font-weight: 500;
-    color: #16191f;
-    width: 160px;
+    color: var(--hny-ink);
+    width: 170px;
+    padding-right: 16px;
 }
 
-.hostney-checks-table td:last-child {
-    color: #545b64;
-}
-
-.hostney-check-pass {
-    color: #15803d;
-}
-
-.hostney-check-pass::before {
-    content: "\2713\00a0";
-    font-weight: 700;
-}
-
-.hostney-check-fail {
-    color: #b91c1c;
-}
-
-.hostney-check-fail::before {
-    content: "\2717\00a0";
-    font-weight: 700;
-}
-
-.hostney-check-warn {
-    color: #a16207;
-}
-
-.hostney-check-warn::before {
-    content: "\26A0\00a0";
-}
-
-/* ─── Activity log table ─── */
-.hostney-log-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-}
-
-.hostney-log-table th {
-    text-align: left;
-    font-weight: 500;
-    color: #16191f;
-    padding: 8px 12px 8px 0;
-    border-bottom: 2px solid #e0e0e0;
-    font-size: 12.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-}
-
-.hostney-log-table td {
-    padding: 8px 12px 8px 0;
-    border-bottom: 1px solid #f0f0f1;
-    color: #545b64;
-    vertical-align: middle;
-    max-width: 200px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.hostney-log-table tr:last-child td {
-    border-bottom: none;
-}
-
-/* ─── Spinner ─── */
-.hostney-spinner {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    border: 2px solid rgba(255, 149, 0, 0.2);
-    border-top-color: #ff9500;
-    border-radius: 50%;
-    animation: hostney-spin 0.7s linear infinite;
-    vertical-align: middle;
-    margin-left: 6px;
-}
-
-@keyframes hostney-spin {
-    to { transform: rotate(360deg); }
-}
-
-/* ─── Gradient accent bar ─── */
-.hostney-card-accent {
-    position: relative;
-    overflow: hidden;
-}
-
-.hostney-card-accent::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, #22c55e, #14b8a6, #3b82f6);
-    border-radius: 10px 10px 0 0;
-}
-
-/* ─── Warm-up progress ─── */
-/*
- * The bar is the only place on this page that reports something still in
- * flight, so it needs to look alive without a spinner competing with it:
- * the width transition carries the movement.
- */
-#hostney-warm-progress {
-    margin-top: 16px;
-}
-
-.hostney-progress-track {
-    width: 100%;
-    height: 8px;
-    background: #eceef1;
-    border-radius: 999px;
-    overflow: hidden;
-}
-
-.hostney-progress-bar {
-    height: 100%;
-    width: 0;
-    background: linear-gradient(90deg, #ff9500, #ffb347);
-    border-radius: 999px;
-    /* Matches the 2s poll, so the bar glides between updates rather than
-       stepping. Longer than the poll and it would still be moving when the
-       next number lands. */
-    transition: width 0.6s ease;
-}
-
-.hostney-progress-label {
-    margin: 10px 0 0;
-    font-size: 13px;
-    color: #16191f;
-}
-
-.hostney-progress-current {
-    margin: 4px 0 0;
-    font-size: 12px;
-    color: #656871;
-    /* A long permalink must not widen the card. */
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* ── Account keyspace ────────────────────────────────────────────────────
-   One Redis serves every site on the account, so this table is how somebody
-   sees whose entries are whose before pressing a flush button. */
-
-.hostney-shared-note {
-    margin: 0 0 12px;
-    padding: 10px 12px;
-    background: #f6f7f7;
-    border-left: 3px solid #ff9500;
-    font-size: 13px;
-    color: #16191f;
-}
+.hostney-check-pass    { color: var(--hny-pass); font-weight: 500; }
+.hostney-check-warn    { color: var(--hny-warn); font-weight: 500; }
+.hostney-check-fail    { color: var(--hny-fail); font-weight: 500; }
+.hostney-check-neutral { color: var(--hny-ink-mute); }
 
 .hostney-muted {
     font-size: 12px;
-    color: #656871;
+    line-height: 1.55;
+    color: var(--hny-ink-mute);
 }
+.hostney-checks-table .hostney-muted { margin: 6px 0 0; max-width: 54ch; }
 
-.hostney-keyspace-result {
-    margin-top: 14px;
-}
+/* ─── Buttons (Button.jsx: h-9 px-4 text-sm, rounded-lg) ────────────────── */
 
-.hostney-keyspace-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.hostney-keyspace-table th {
-    padding: 8px 0;
-    border-bottom: 1px solid #dcdcde;
-    font-size: 12px;
-    font-weight: 600;
-    color: #545b64;
-    text-align: left;
-}
-
-.hostney-keyspace-table td {
-    padding: 10px 0;
-    border-bottom: 1px solid #f0f0f1;
+.hostney-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 16px;
+    border-radius: var(--hny-radius);
+    border: 1px solid transparent;
     font-size: 13px;
-    vertical-align: middle;
-    color: #16191f;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background-color .12s ease, border-color .12s ease;
 }
+.hostney-btn:disabled { cursor: default; opacity: .6; }
+.hostney-btn:focus-visible { outline: 2px solid var(--hny-primary); outline-offset: 2px; }
 
-.hostney-keyspace-table tr:last-child td {
-    border-bottom: none;
+.hostney-btn-primary { background: var(--hny-primary); color: #fff; }
+.hostney-btn-primary:hover:not(:disabled) { background: var(--hny-primary-h); }
+
+.hostney-btn-outline-neutral {
+    background: var(--hny-card);
+    border-color: #e0e2e6;
+    color: #374151;
 }
+.hostney-btn-outline-neutral:hover:not(:disabled) { background: #f9fafb; }
 
-/* The entry count. Right-aligned so magnitudes line up and an outlier is
-   visible without reading every row. */
-.hostney-keyspace-table th:last-child,
-.hostney-keyspace-table td:last-child {
-    text-align: right;
-    width: 100px;
+.hostney-btn-danger { background: var(--hny-danger); color: #fff; }
+.hostney-btn-danger:hover:not(:disabled) { background: var(--hny-danger-h); }
+
+.hostney-btn-small { height: 30px; padding: 0 12px; font-size: 12px; }
+
+.hostney-btn-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 18px;
 }
+.hostney-btn-group form { display: inline; margin: 0; }
 
-.hostney-keyspace-table code {
-    font-size: 12px;
-    color: #545b64;
-    background: none;
-    padding: 0;
+/* ─── Inputs ────────────────────────────────────────────────────────────── */
+
+#hostney-cache-container select,
+#hostney-cache-container input[type="number"],
+.hostney-number {
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid #e0e2e6;
+    border-radius: var(--hny-radius);
+    background: var(--hny-card);
+    color: var(--hny-ink);
+    font-size: 13px;
+    line-height: 1;
 }
-
-.hostney-keyspace-current td {
-    font-weight: 600;
+#hostney-cache-container select:focus,
+#hostney-cache-container input:focus {
+    outline: none;
+    border-color: var(--hny-primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .15);
 }
-
-/* ⚠ NOT COLOUR ALONE. Unmatched entries are the row that matters most, and
-   WCAG 2.1 AA needs the distinction carried by something a colour-blind or
-   monochrome reader also gets - the row is labelled "Not matched to a site"
-   in its first cell, and the rule below is emphasis on top of that, never
-   the only signal. */
-.hostney-keyspace-orphan td {
-    color: #545b64;
-    font-style: italic;
-    border-top: 1px solid #dcdcde;
-}
-
-/* ── Tuning + cleanup controls (1.3.0) ─────────────────────────────────── */
+.hostney-number { width: 90px; }
 
 .hostney-toggle-row {
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 13px;
-    color: #16191f;
+    color: var(--hny-ink);
     cursor: pointer;
 }
+.hostney-toggle-row input[type="checkbox"] { margin: 0; }
 
-.hostney-checks-table select,
-.hostney-number {
+/* ─── Feedback lines ────────────────────────────────────────────────────── */
+
+.hostney-success,
+.hostney-error,
+.hostney-metabox-feedback,
+.hostney-settings-feedback {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: var(--hny-radius);
     font-size: 13px;
-    padding: 4px 8px;
-    border: 1px solid #dcdcde;
-    border-radius: 4px;
-    background: #fff;
-    color: #16191f;
+    border: 1px solid transparent;
+}
+.hostney-success { background: #eaf5ee; border-color: #cfe8d8; color: #14532d; }
+.hostney-error   { background: #fcecea; border-color: #f3cfcb; color: #7f1d1d; }
+
+.hostney-shared-note {
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    border-radius: var(--hny-radius);
+    background: var(--hny-inset);
+    border: 1px solid var(--hny-border);
+    border-left: 3px solid var(--hny-brand);
+    font-size: 12.5px;
+    color: var(--hny-ink-soft);
 }
 
-.hostney-number { width: 80px; }
+/* ─── Data tables (keyspace, cleanup, log) ──────────────────────────────── */
 
-/* The helper line under each control. Sized down and greyed so the control
-   itself stays the thing you read first. */
-.hostney-checks-table .hostney-muted {
-    margin: 6px 0 0;
-    max-width: 52ch;
+.hostney-keyspace-result { margin-top: 16px; }
+
+.hostney-keyspace-table,
+.hostney-log-table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid var(--hny-border);
+    border-radius: var(--hny-radius);
+    overflow: hidden;
+    font-size: 12.5px;
+}
+.hostney-keyspace-table th,
+.hostney-log-table th {
+    text-align: left;
+    padding: 8px 12px;
+    background: var(--hny-inset);
+    border-bottom: 1px solid var(--hny-border);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--hny-ink-mute);
+}
+.hostney-keyspace-table td,
+.hostney-log-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--hny-border);
+    color: var(--hny-ink-soft);
+    vertical-align: middle;
+}
+.hostney-keyspace-table tr:last-child td,
+.hostney-log-table tr:last-child td { border-bottom: none; }
+
+.hostney-keyspace-table code {
+    font-size: 11.5px;
+    color: var(--hny-ink-mute);
+    background: none;
+    padding: 0;
+}
+.hostney-keyspace-current td { font-weight: 600; color: var(--hny-ink); }
+
+/* ⚠ NOT COLOUR ALONE. The row is labelled "Not matched to a site" in its first
+   cell; the italic is emphasis on top of that, never the only signal. */
+.hostney-keyspace-orphan td {
+    color: var(--hny-ink-mute);
+    font-style: italic;
+    border-top: 1px solid var(--hny-border);
 }
 
-.hostney-btn-small {
-    padding: 4px 10px;
+/* ─── Progress (pre-fetch) ──────────────────────────────────────────────── */
+
+.hostney-progress-track {
+    height: 6px;
+    background: var(--hny-soft);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 14px;
+}
+.hostney-progress-bar {
+    height: 100%;
+    width: 0;
+    background: var(--hny-brand);
+    border-radius: 999px;
+    /* Matches the 2s poll, so the bar glides between updates rather than
+       stepping. Longer than the poll and it would still be moving when the
+       next number lands. */
+    transition: width .6s ease;
+}
+.hostney-progress-label { margin: 10px 0 0; font-size: 13px; color: var(--hny-ink); }
+.hostney-progress-current {
+    margin: 4px 0 0;
     font-size: 12px;
+    color: var(--hny-ink-mute);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ─── Spinner ───────────────────────────────────────────────────────────── */
+
+.hostney-spinner {
+    display: inline-block;
+    width: 12px; height: 12px;
+    margin-left: 6px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: hostney-spin .6s linear infinite;
+    vertical-align: -1px;
+}
+@keyframes hostney-spin { to { transform: rotate(360deg); } }
+
+/* ─── Modal (mirrors components/layout/Modal.jsx) ───────────────────────── */
+
+.hostney-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .5);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 48px 16px;
+    overflow-y: auto;
+    /* Above wp-admin's own chrome: the admin bar is 99100 and the collapsed
+       menu flyouts sit just under it. Anything lower and the backdrop covers
+       the page while the sidebar stays clickable through it. */
+    z-index: 100000;
+}
+
+.hostney-modal {
+    width: 100%;
+    max-width: 560px;
+    background: var(--hny-card);
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, .1), 0 10px 10px -5px rgba(0, 0, 0, .04);
+    margin: auto 0;
+}
+.hostney-modal-sm { max-width: 400px; }
+
+.hostney-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--hny-border);
+}
+.hostney-modal-head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--hny-ink);
+}
+.hostney-modal-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px; height: 32px;
+    border: none;
+    background: none;
+    border-radius: var(--hny-radius);
+    color: var(--hny-ink-mute);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+}
+.hostney-modal-close:hover { background: var(--hny-soft); }
+.hostney-modal-close:focus-visible { outline: 2px solid var(--hny-primary); outline-offset: 2px; }
+
+.hostney-modal-body {
+    padding: 18px 20px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--hny-ink-soft);
+}
+.hostney-modal-body p { margin: 0 0 10px; }
+.hostney-modal-body p:last-child { margin-bottom: 0; }
+.hostney-modal-body ul {
+    margin: 10px 0 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* The inset panel a confirm uses to name what it is about to act on - the
+   same role as hostney-bg-inset in the panel. */
+.hostney-modal-inset {
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: var(--hny-inset);
+    border: 1px solid var(--hny-border);
+    border-radius: var(--hny-radius);
+    font-size: 12.5px;
+    color: var(--hny-ink);
+}
+
+.hostney-modal-foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--hny-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .hostney-progress-bar,
+    .hostney-btn { transition: none; }
+    .hostney-spinner { animation-duration: 2s; }
+}
+
+@media (max-width: 782px) {
+    #hostney-cache-container { margin-right: 0; }
+    .hostney-checks-table td:first-child { width: auto; }
 }

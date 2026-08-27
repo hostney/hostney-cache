@@ -81,7 +81,18 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
 
 <div class="wrap">
     <div class="hostney-page-heading">
-        <h1><span class="hostney-brand">HOSTNEY</span> <span class="hostney-brand-subtitle">&ndash; Cache</span></h1>
+        <?php
+        // The control panel's own mark (frontend components/layout/Logo.jsx),
+        // inlined rather than shipped as a file: it needs no asset URL, cannot
+        // 404 behind a CDN or a moved plugin directory, and inherits its colour
+        // from CSS so there is one place to change it.
+        ?>
+        <svg class="hostney-logo" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+            <rect x="5" y="4" width="4" height="16" rx="1.4" fill="currentColor" />
+            <rect x="14" y="4" width="4" height="16" rx="1.4" fill="currentColor" />
+            <path d="M8.6 10 H17.6 L23.8 12 L17.6 14 H8.6 Z" fill="currentColor" />
+        </svg>
+        <h1><span class="hostney-brand">Hostney</span> <span class="hostney-brand-subtitle">Cache</span></h1>
     </div>
 
     <?php if ( $hostney_notice_type === 'dropin-installed' ) : ?>
@@ -350,7 +361,15 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                             <button type="submit" class="hostney-btn hostney-btn-primary">Update drop-in</button>
                         </form>
                     <?php elseif ( $hostney_oc_dropin === 'installed' ) : ?>
-                        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
+                        <?php
+                        // ⚠ STILL A REAL FORM POST, NOT AJAX, and deliberately.
+                        // Removing the drop-in changes the WordPress bootstrap
+                        // environment - object-cache.php is loaded before
+                        // plugins exist - so the page has to reload for what it
+                        // reports afterwards to be true. The modal only gates
+                        // the submit; it does not replace it.
+                        ?>
+                        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;" data-hostney-confirm="remove-dropin">
                             <?php wp_nonce_field( 'hostney_dropin_action', '_hostney_nonce' ); ?>
                             <input type="hidden" name="action" value="hostney_object_cache_remove_dropin">
                             <button type="submit" class="hostney-btn hostney-btn-outline-neutral">Remove drop-in</button>

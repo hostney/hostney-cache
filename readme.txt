@@ -52,6 +52,9 @@ It runs in the background, **one page at a time**. A hosting account has a small
 * Nothing is removed without showing you the count first, and at least one revision per post is always kept
 * Cleanup works in batches, so a large backlog takes a few presses rather than making the site unresponsive while it runs
 * The post editor always keeps its background activity, so autosave and edit locking are unaffected
+* Redesigned to match the Hostney control panel, and to use the full width of the screen instead of a single narrow column
+* Confirmations are now proper dialogs rather than browser pop-ups, so they can show exactly which sites an action affects
+* Removing the object cache drop-in now asks first, and says what stops working
 
 = 1.2.4 =
 * Fixed: cache purging silently did nothing when the site was administered over a preview (.hostney.app) address. Hostney serves a site on whichever address you visit, so WordPress reported the preview hostname as the site address, and the purge was sent to the preview instead of to the live domain. Preview addresses do not cache, so the request failed and the live cache was never cleared - edits simply did not appear, with no error anywhere

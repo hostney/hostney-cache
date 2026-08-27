@@ -6,6 +6,101 @@
 (function ($) {
     'use strict';
 
+    /**
+     * A confirm dialog that looks like the rest of Hostney.
+     *
+     * ⚠⚠ REPLACES window.confirm(), AND THAT IS THE POINT. A browser prompt
+     * cannot be styled, cannot show a list, is rendered by the OS in a typeface
+     * and position we do not control, and on some browsers is suppressed
+     * entirely after a previous dialog - so the "this clears every site on the
+     * account" warning could simply not appear, and the flush would proceed.
+     * A dialog that can silently not render is not a confirmation.
+     *
+     * Mirrors components/layout/Modal.jsx in the control panel: backdrop click,
+     * Escape, and a header close, all resolving to the same cancel.
+     *
+     * @param {object}   opts
+     * @param {string}   opts.title
+     * @param {jQuery}   opts.body          Built by the caller, never an HTML string.
+     * @param {string}   opts.confirmText
+     * @param {string}   opts.confirmClass  A hostney-btn-* modifier.
+     * @param {Function} opts.onConfirm     Receives a done() to close the modal.
+     */
+    function hostneyConfirm(opts) {
+        var $backdrop = $('<div>').addClass('hostney-modal-backdrop');
+        var $modal = $('<div>').addClass('hostney-modal').attr({
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': opts.title
+        });
+
+        var $close = $('<button>')
+            .addClass('hostney-modal-close')
+            .attr({ type: 'button', 'aria-label': 'Close' })
+            .html('&times;');
+
+        var $head = $('<div>').addClass('hostney-modal-head')
+            .append($('<h2>').text(opts.title))
+            .append($close);
+
+        var $body = $('<div>').addClass('hostney-modal-body').append(opts.body);
+
+        var $cancel = $('<button>')
+            .addClass('hostney-btn hostney-btn-outline-neutral')
+            .attr('type', 'button')
+            .text('Cancel');
+
+        var $confirm = $('<button>')
+            .addClass('hostney-btn ' + (opts.confirmClass || 'hostney-btn-primary'))
+            .attr('type', 'button')
+            .text(opts.confirmText || 'Confirm');
+
+        var $foot = $('<div>').addClass('hostney-modal-foot').append($cancel).append($confirm);
+
+        $modal.append($head).append($body).append($foot);
+        $backdrop.append($modal);
+
+        // Restore focus to whatever opened the dialog. Without this, closing it
+        // drops focus to the top of the document and a keyboard user has to tab
+        // back through the whole page to reach the button they just pressed.
+        var $opener = $(document.activeElement);
+
+        function close() {
+            $backdrop.remove();
+            $(document).off('keydown.hostneyModal');
+            if ($opener && $opener.length) {
+                $opener.trigger('focus');
+            }
+        }
+
+        $close.on('click', close);
+        $cancel.on('click', close);
+
+        // Only a click that both started AND ended on the backdrop closes it.
+        // A drag that begins inside the dialog and releases outside is a text
+        // selection, not a dismissal, and closing on it loses whatever the
+        // person was doing.
+        var downOnBackdrop = false;
+        $backdrop.on('mousedown', function (e) { downOnBackdrop = (e.target === $backdrop[0]); });
+        $backdrop.on('mouseup', function (e) {
+            if (downOnBackdrop && e.target === $backdrop[0]) { close(); }
+            downOnBackdrop = false;
+        });
+
+        $(document).on('keydown.hostneyModal', function (e) {
+            if (e.key === 'Escape') { close(); }
+        });
+
+        $confirm.on('click', function () {
+            $confirm.prop('disabled', true).html('Working...<span class="hostney-spinner"></span>');
+            $cancel.prop('disabled', true);
+            opts.onConfirm(close);
+        });
+
+        $('body').append($backdrop);
+        $confirm.trigger('focus');
+    }
+
     $(document).ready(function () {
 
         // Purge all cache (admin page button)
@@ -125,40 +220,61 @@
             // ⚠ NAME THE SITES. "Are you sure?" gives somebody nothing to be
             // sure ABOUT, and the whole reason this dialog exists is that the
             // person pressing it may not know anyone else is on the instance.
-            var nl = String.fromCharCode(10);
-            var question = others.length
-                ? 'This clears the object cache for every site on this account, including:' +
-                  nl + nl + others.join(nl) + nl + nl +
-                  'Those sites will run slower until their caches rebuild. Continue?'
-                : 'This clears the object cache for every site on this account. Continue?';
-
-            if (!window.confirm(question)) {
-                return;
+            // The list is what a browser prompt could never render properly,
+            // and is why this is a real modal now.
+            var $body = $('<div>');
+            if (others.length) {
+                $body.append($('<p>').text(
+                    'This clears the object cache for every site on this account. Those sites will ' +
+                    'run slower until their caches rebuild.'
+                ));
+                var $inset = $('<div>').addClass('hostney-modal-inset');
+                $inset.append($('<div>').css({ fontWeight: 600, marginBottom: '6px' }).text('Also cleared'));
+                var $list = $('<ul>').css({ margin: 0, paddingLeft: '18px' });
+                others.forEach(function (name) {
+                    // .text(), because these are other sites' home URLs, read
+                    // from a database this page does not own.
+                    $list.append($('<li>').text(name));
+                });
+                $inset.append($list);
+                $body.append($inset);
+            } else {
+                $body.append($('<p>').text('This clears the object cache for every site on this account.'));
             }
 
-            $btn.prop('disabled', true).html('Clearing...<span class="hostney-spinner"></span>');
-            $feedback.hide();
+            hostneyConfirm({
+                title: 'Flush all sites on this account',
+                body: $body,
+                confirmText: 'Flush all sites',
+                confirmClass: 'hostney-btn-danger',
+                onConfirm: function (done) {
+                    $btn.prop('disabled', true).html('Clearing...<span class="hostney-spinner"></span>');
+                    $feedback.hide();
 
-            $.ajax({
-                url: hostneyCache.ajaxUrl,
-                type: 'POST',
-                data: {
-                    action: 'hostney_object_cache_flush_account',
-                    nonce: hostneyCache.nonce,
-                    confirmed: '1'
-                },
-                success: function (response) {
-                    if (response.success) {
-                        $feedback.attr('class', 'hostney-success').text(response.data.message).show();
-                    } else {
-                        var msg = response.data && response.data.message ? response.data.message : 'Flush failed.';
-                        $feedback.attr('class', 'hostney-error').text(msg).show();
-                    }
-                    $btn.prop('disabled', false).text(label);
-                },
-                error: function () {
-                    $feedback.attr('class', 'hostney-error').text('Network error. Please try again.').show();
-                    $btn.prop('disabled', false).text(label);
+                    $.ajax({
+                        url: hostneyCache.ajaxUrl,
+                        type: 'POST',
+                        data: {
+                            action: 'hostney_object_cache_flush_account',
+                            nonce: hostneyCache.nonce,
+                            confirmed: '1'
+                        },
+                        success: function (response) {
+                            if (response.success) {
+                                $feedback.attr('class', 'hostney-success').text(response.data.message).show();
+                            } else {
+                                var msg = response.data && response.data.message ? response.data.message : 'Flush failed.';
+                                $feedback.attr('class', 'hostney-error').text(msg).show();
+                            }
+                            $btn.prop('disabled', false).text(label);
+                            done();
+                        },
+                        error: function () {
+                            $feedback.attr('class', 'hostney-error').text('Network error. Please try again.').show();
+                            $btn.prop('disabled', false).text(label);
+                            done();
+                        }
+                    });
                 }
             });
         });
@@ -465,6 +581,40 @@
                 },
                 error: function () {
                     $btn.prop('disabled', false).text('Remove');
+                }
+            });
+        });
+
+        // Gate the drop-in removal behind the same modal as everything else.
+        //
+        // It stays a real form POST - removing object-cache.php changes the
+        // WordPress bootstrap, so the page must reload for what it reports
+        // afterwards to be true. The modal only decides whether to submit.
+        $('form[data-hostney-confirm="remove-dropin"]').on('submit', function (e) {
+            var form = this;
+            if ($(form).data('hostneyConfirmed')) {
+                return;
+            }
+            e.preventDefault();
+
+            var $body = $('<div>');
+            $body.append($('<p>').text(
+                'This site will stop using the account object cache. Pages will still be ' +
+                'cached by the server, but database queries and options will be looked up ' +
+                'again on every request until the drop-in is reinstalled.'
+            ));
+            $body.append($('<p>').text('This site’s cached entries are cleared at the same time. Other sites on the account are not affected.'));
+
+            hostneyConfirm({
+                title: 'Remove object cache drop-in',
+                body: $body,
+                confirmText: 'Remove drop-in',
+                confirmClass: 'hostney-btn-danger',
+                onConfirm: function () {
+                    // Flagged before re-submitting, or this handler intercepts
+                    // its own submit and the dialog reopens forever.
+                    $(form).data('hostneyConfirmed', true);
+                    form.submit();
                 }
             });
         });
