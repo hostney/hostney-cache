@@ -122,8 +122,26 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
         </div>
     <?php endif; ?>
 
-    <div id="hostney-cache-container">
 
+    <?php
+    // ⚠ TABS RATHER THAN ONE LONG COLUMN, and rather than the auto-fit grid
+    // this replaces. The cards differ enormously in height - "Purge cache" is
+    // four lines and "Flush and pre-fetch" is a screenful - so a multi-column
+    // grid left a short card beside a tall one with a void underneath it.
+    //
+    // ⚠ THE PANELS ARE VISIBLE BY DEFAULT and JS hides the inactive ones. The
+    // other way round means a JS error leaves a page with no content at all,
+    // rather than a page that is merely long.
+    ?>
+    <div class="hostney-tabs" role="tablist" aria-label="Hostney Cache sections">
+        <button type="button" class="hostney-tab" role="tab" id="hostney-tab-overview" data-tab="overview" aria-controls="hostney-panel-overview" aria-selected="false">Overview</button>
+        <button type="button" class="hostney-tab" role="tab" id="hostney-tab-object" data-tab="object" aria-controls="hostney-panel-object" aria-selected="false">Object cache</button>
+        <button type="button" class="hostney-tab" role="tab" id="hostney-tab-optimise" data-tab="optimise" aria-controls="hostney-panel-optimise" aria-selected="false">Optimisation</button>
+        <button type="button" class="hostney-tab" role="tab" id="hostney-tab-activity" data-tab="activity" aria-controls="hostney-panel-activity" aria-selected="false">Activity</button>
+    </div>
+
+    <div id="hostney-cache-container">
+        <div class="hostney-panel" role="tabpanel" id="hostney-panel-overview" data-panel="overview" aria-labelledby="hostney-tab-overview">
         <!-- Card 1: Status -->
         <div class="hostney-card hostney-card-accent">
             <span class="hostney-status-badge hostney-status-badge-active">Active</span>
@@ -226,7 +244,77 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                 </tr>
             </table>
         </div>
+        <!-- Card 3: Purge cache -->
+        <div class="hostney-card">
+            <h2>Purge cache</h2>
 
+            <?php if ( ! $hostney_cache_page_cached && ! $hostney_cache_endpoint_reachable ) : ?>
+                <?php
+                // ⚠ THE BUTTON USED TO BE OFFERED UNCONDITIONALLY, and on an
+                // address with no page cache it answered "HTTP 404" in red. That
+                // is a true statement about a request nobody should have been
+                // invited to make: there is no purge location on a vhost that
+                // does not cache. Offering an action that cannot work, and then
+                // reporting its failure as an error, is how a working site gets
+                // diagnosed as a broken one.
+                ?>
+                <p>
+                    There are no cached pages to clear on this address, so there is nothing to purge.
+                    Object caching is separate and is managed above.
+                </p>
+            <?php else : ?>
+                <p>Clear all cached pages for this site. Use this if content changes are not reflecting.</p>
+
+                <button id="hostney-purge-all-btn" class="hostney-btn hostney-btn-primary">Purge all cache</button>
+
+                <div id="hostney-purge-feedback" style="display: none;"></div>
+            <?php endif; ?>
+        </div>
+        <!-- Card 4: Flush and pre-fetch -->
+        <div class="hostney-card">
+            <h2>Flush and pre-fetch</h2>
+            <p>
+                Clear the page cache and then visit every public page once, so the cache is already
+                full before your visitors arrive. Useful after a theme change or a bulk edit, when a
+                plain purge would leave the next visitor to each page waiting for it to be rendered.
+            </p>
+            <p>
+                This runs in the background, one page at a time, so it never competes with real
+                visitors for this site&rsquo;s PHP workers. That makes it deliberately unhurried &mdash;
+                a few hundred pages takes tens of minutes. You can leave this page; the run carries on
+                and the progress comes back when you return.
+            </p>
+
+            <?php if ( ! $hostney_cache_endpoint_reachable ) : ?>
+                <?php
+                // Without page caching there is nothing to fill: every page
+                // would be rendered and immediately thrown away. Better to say
+                // so than to let somebody run it and wonder why the site is no
+                // faster afterwards.
+                ?>
+                <p class="hostney-check-warn" style="margin-bottom:0;">
+                    Page caching is not enabled for this site, so there is nothing to pre-fetch into.
+                </p>
+            <?php else : ?>
+                <div class="hostney-btn-group">
+                    <button id="hostney-warm-start-btn" class="hostney-btn hostney-btn-primary">Flush and pre-fetch</button>
+                    <button id="hostney-warm-stop-btn" class="hostney-btn hostney-btn-outline-neutral" style="display:none;">Stop</button>
+                </div>
+
+                <div id="hostney-warm-progress" style="display:none;">
+                    <div class="hostney-progress-track">
+                        <div class="hostney-progress-bar" id="hostney-warm-bar" style="width:0%;"></div>
+                    </div>
+                    <p class="hostney-progress-label" id="hostney-warm-label"></p>
+                    <p class="hostney-progress-current" id="hostney-warm-current"></p>
+                </div>
+
+                <div id="hostney-warm-feedback" style="display: none;"></div>
+            <?php endif; ?>
+        </div>
+        </div>
+
+        <div class="hostney-panel" role="tabpanel" id="hostney-panel-object" data-panel="object" aria-labelledby="hostney-tab-object">
         <!-- Card 2: Object cache (Redis or Memcached, whichever is running) -->
         <div class="hostney-card">
             <?php if ( $hostney_oc_active ) : ?>
@@ -410,8 +498,6 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
 
             <div id="hostney-object-cache-feedback" style="display: none;"></div>
         </div>
-
-        <?php if ( $hostney_oc_active ) : ?>
         <!-- Card: Account keyspace -->
         <div class="hostney-card">
             <h2>Account keyspace</h2>
@@ -445,8 +531,9 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                 </p>
             <?php endif; ?>
         </div>
-        <?php endif; ?>
+        </div>
 
+        <div class="hostney-panel" role="tabpanel" id="hostney-panel-optimise" data-panel="optimise" aria-labelledby="hostney-tab-optimise">
         <!-- Card: Reduce background work -->
         <div class="hostney-card">
             <h2>Reduce background work</h2>
@@ -534,7 +621,6 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
             </div>
             <div class="hostney-settings-feedback" style="display: none;"></div>
         </div>
-
         <!-- Card: Database cleanup -->
         <div class="hostney-card">
             <h2>Database cleanup</h2>
@@ -590,77 +676,9 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
             </div>
             <div class="hostney-settings-feedback" style="display: none;"></div>
         </div>
-
-        <!-- Card 3: Purge cache -->
-        <div class="hostney-card">
-            <h2>Purge cache</h2>
-
-            <?php if ( ! $hostney_cache_page_cached && ! $hostney_cache_endpoint_reachable ) : ?>
-                <?php
-                // ⚠ THE BUTTON USED TO BE OFFERED UNCONDITIONALLY, and on an
-                // address with no page cache it answered "HTTP 404" in red. That
-                // is a true statement about a request nobody should have been
-                // invited to make: there is no purge location on a vhost that
-                // does not cache. Offering an action that cannot work, and then
-                // reporting its failure as an error, is how a working site gets
-                // diagnosed as a broken one.
-                ?>
-                <p>
-                    There are no cached pages to clear on this address, so there is nothing to purge.
-                    Object caching is separate and is managed above.
-                </p>
-            <?php else : ?>
-                <p>Clear all cached pages for this site. Use this if content changes are not reflecting.</p>
-
-                <button id="hostney-purge-all-btn" class="hostney-btn hostney-btn-primary">Purge all cache</button>
-
-                <div id="hostney-purge-feedback" style="display: none;"></div>
-            <?php endif; ?>
         </div>
 
-        <!-- Card 4: Flush and pre-fetch -->
-        <div class="hostney-card">
-            <h2>Flush and pre-fetch</h2>
-            <p>
-                Clear the page cache and then visit every public page once, so the cache is already
-                full before your visitors arrive. Useful after a theme change or a bulk edit, when a
-                plain purge would leave the next visitor to each page waiting for it to be rendered.
-            </p>
-            <p>
-                This runs in the background, one page at a time, so it never competes with real
-                visitors for this site&rsquo;s PHP workers. That makes it deliberately unhurried &mdash;
-                a few hundred pages takes tens of minutes. You can leave this page; the run carries on
-                and the progress comes back when you return.
-            </p>
-
-            <?php if ( ! $hostney_cache_endpoint_reachable ) : ?>
-                <?php
-                // Without page caching there is nothing to fill: every page
-                // would be rendered and immediately thrown away. Better to say
-                // so than to let somebody run it and wonder why the site is no
-                // faster afterwards.
-                ?>
-                <p class="hostney-check-warn" style="margin-bottom:0;">
-                    Page caching is not enabled for this site, so there is nothing to pre-fetch into.
-                </p>
-            <?php else : ?>
-                <div class="hostney-btn-group">
-                    <button id="hostney-warm-start-btn" class="hostney-btn hostney-btn-primary">Flush and pre-fetch</button>
-                    <button id="hostney-warm-stop-btn" class="hostney-btn hostney-btn-outline-neutral" style="display:none;">Stop</button>
-                </div>
-
-                <div id="hostney-warm-progress" style="display:none;">
-                    <div class="hostney-progress-track">
-                        <div class="hostney-progress-bar" id="hostney-warm-bar" style="width:0%;"></div>
-                    </div>
-                    <p class="hostney-progress-label" id="hostney-warm-label"></p>
-                    <p class="hostney-progress-current" id="hostney-warm-current"></p>
-                </div>
-
-                <div id="hostney-warm-feedback" style="display: none;"></div>
-            <?php endif; ?>
-        </div>
-
+        <div class="hostney-panel" role="tabpanel" id="hostney-panel-activity" data-panel="activity" aria-labelledby="hostney-tab-activity">
         <!-- Card 5: Recent activity -->
         <div class="hostney-card">
             <h2>Recent activity</h2>
@@ -708,6 +726,7 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                     <button id="hostney-clear-log-btn" class="hostney-btn hostney-btn-outline-neutral">Clear log</button>
                 </div>
             <?php endif; ?>
+        </div>
         </div>
 
     </div>

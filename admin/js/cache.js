@@ -156,6 +156,66 @@
             });
         });
 
+        // ── Tabs ────────────────────────────────────────────────────────
+        var $tabs = $('.hostney-tab');
+        var $panels = $('.hostney-panel');
+
+        if ($tabs.length && $panels.length) {
+            function showTab(slug, push) {
+                var matched = false;
+
+                $panels.each(function () {
+                    var isTarget = $(this).data('panel') === slug;
+                    // .prop, not .attr: hidden is a boolean attribute and
+                    // attr('hidden', false) leaves it present in some browsers,
+                    // which would hide the panel we just selected.
+                    $(this).prop('hidden', !isTarget);
+                    if (isTarget) { matched = true; }
+                });
+
+                if (!matched) { return false; }
+
+                $tabs.attr('aria-selected', 'false');
+                $tabs.filter('[data-tab="' + slug + '"]').attr('aria-selected', 'true');
+
+                // In the hash so a reload, a bookmark or a link from support
+                // lands on the same tab. replaceState rather than assigning
+                // location.hash: assigning scrolls the page to the element with
+                // that id, and there is no such element.
+                if (push && window.history && window.history.replaceState) {
+                    window.history.replaceState(null, '', '#' + slug);
+                }
+                return true;
+            }
+
+            $tabs.on('click', function () {
+                showTab($(this).data('tab'), true);
+            });
+
+            // Left/right arrows move between tabs, which is what a tablist is
+            // expected to do and costs four lines.
+            $tabs.on('keydown', function (e) {
+                if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') { return; }
+                var i = $tabs.index(this);
+                var next = e.key === 'ArrowRight' ? (i + 1) % $tabs.length : (i - 1 + $tabs.length) % $tabs.length;
+                $tabs.eq(next).trigger('focus').trigger('click');
+            });
+
+            // ⚠ A DROP-IN CHANGE REDIRECTS BACK HERE AND LOSES THE HASH - it is
+            // a server-side redirect carrying ?hostney-notice=. Landing on
+            // Overview would hide the notice's own card, so the result of the
+            // action the customer just took would be on a tab they are not
+            // looking at.
+            var initial = (window.location.hash || '').replace('#', '');
+            if (window.location.search.indexOf('hostney-notice=dropin') !== -1) {
+                initial = 'object';
+            }
+
+            if (!initial || !showTab(initial, false)) {
+                showTab($tabs.first().data('tab'), false);
+            }
+        }
+
         // ── Object cache flushing ───────────────────────────────────────
         // There is ONE Redis per ACCOUNT, so these two buttons differ by blast
         // radius, not by wording. Keep them visibly different.

@@ -93,17 +93,59 @@
 
 /* ─── Full-width card grid ──────────────────────────────────────────────── */
 
-/* Was max-width: 680px, i.e. a single narrow column on a 2560px monitor with
-   the rest of the screen empty. auto-fit lets the browser decide how many
-   columns fit; align-items:start stops a short card stretching to match a tall
-   neighbour, which is what makes a grid of settings cards look like a table. */
-#hostney-cache-container {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
-    gap: 20px;
-    align-items: start;
-    margin-right: 20px;
+/* ─── Tabs ──────────────────────────────────────────────────────────────
+   These replaced an auto-fit card grid. The grid was genuinely full width but
+   it looked broken: the cards differ enormously in height - "Purge cache" is
+   four lines, "Flush and pre-fetch" is a screenful - so a short card sat beside
+   a tall one with a large void underneath it, and the eye read the void as
+   missing content rather than as layout.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.hostney-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    margin: 0 20px 20px 0;
+    border-bottom: 1px solid var(--hny-border);
 }
+
+.hostney-tab {
+    appearance: none;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--hny-ink-mute);
+    cursor: pointer;
+    border-radius: var(--hny-radius) var(--hny-radius) 0 0;
+}
+.hostney-tab:hover { color: var(--hny-ink); background: var(--hny-soft); }
+.hostney-tab:focus-visible { outline: 2px solid var(--hny-primary); outline-offset: -2px; }
+.hostney-tab[aria-selected="true"] {
+    color: var(--hny-ink);
+    border-bottom-color: var(--hny-brand);
+    background: none;
+}
+
+#hostney-cache-container { margin-right: 20px; }
+
+/* One column inside a panel, and a reading width rather than the monitor's.
+   Stacking is what removes the voids; the tabs are what stop the page becoming
+   one endless scroll as a result. 1080px is roughly a full-width settings table
+   before the eye has to travel too far between a label and its control. */
+.hostney-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    max-width: 1080px;
+}
+
+/* JS hides the inactive panels. Until it runs they are all visible, so a
+   scripting error leaves a long page rather than an empty one. */
+.hostney-panel[hidden] { display: none; }
 
 .hostney-card {
     background: var(--hny-card);
@@ -113,9 +155,8 @@
     margin: 0;
 }
 
-/* The status card leads the page, so it spans and carries the brand edge. */
+/* The status card leads the page and carries the brand edge. */
 .hostney-card-accent {
-    grid-column: 1 / -1;
     border-top: 3px solid var(--hny-brand);
 }
 
