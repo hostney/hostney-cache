@@ -450,3 +450,38 @@
     font-style: italic;
     border-top: 1px solid #dcdcde;
 }
+
+/* ── Tuning + cleanup controls (1.3.0) ─────────────────────────────────── */
+
+.hostney-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #16191f;
+    cursor: pointer;
+}
+
+.hostney-checks-table select,
+.hostney-number {
+    font-size: 13px;
+    padding: 4px 8px;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+    background: #fff;
+    color: #16191f;
+}
+
+.hostney-number { width: 80px; }
+
+/* The helper line under each control. Sized down and greyed so the control
+   itself stays the thing you read first. */
+.hostney-checks-table .hostney-muted {
+    margin: 6px 0 0;
+    max-width: 52ch;
+}
+
+.hostney-btn-small {
+    padding: 4px 10px;
+    font-size: 12px;
+}

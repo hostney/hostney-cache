@@ -57,6 +57,11 @@ class Hostney_Cache_Admin {
         add_action( 'wp_ajax_hostney_object_cache_flush_account', array( $this, 'ajax_object_cache_flush_account' ) );
         add_action( 'wp_ajax_hostney_object_cache_keyspace', array( $this, 'ajax_object_cache_keyspace' ) );
 
+        // AJAX handlers - tuning settings and database cleanup (1.3.0)
+        add_action( 'wp_ajax_hostney_cache_save_settings', array( $this, 'ajax_save_settings' ) );
+        add_action( 'wp_ajax_hostney_cache_cleanup_counts', array( $this, 'ajax_cleanup_counts' ) );
+        add_action( 'wp_ajax_hostney_cache_cleanup_run', array( $this, 'ajax_cleanup_run' ) );
+
         // Form POST handlers — drop-in (redirect-based, not AJAX)
         add_action( 'admin_post_hostney_object_cache_install_dropin', array( $this, 'handle_install_dropin' ) );
         add_action( 'admin_post_hostney_object_cache_remove_dropin', array( $this, 'handle_remove_dropin' ) );
@@ -357,6 +362,96 @@ class Hostney_Cache_Admin {
         }
 
         wp_send_json_success( $keyspace );
+    }
+
+    /**
+     * AJAX: Save the tuning and cleanup settings.
+     */
+    public function ajax_save_settings() {
+        check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
+        }
+
+        // ⚠ THE WHOLE FORM IS SENT AND THE WHOLE FORM IS STORED. An unchecked
+        // checkbox posts NOTHING, so a partial update that only wrote the keys
+        // present in the request could never turn a toggle back off - it would
+        // read as "not mentioned" and keep the old true. Settings::save()
+        // rebuilds from defaults for the same reason.
+        $settings = Hostney_Cache_Settings::save(
+            isset( $_POST['settings'] ) && is_array( $_POST['settings'] ) ? wp_unslash( $_POST['settings'] ) : array()
+        );
+
+        // The cron event has to follow the setting in the same request, or
+        // switching the schedule off leaves an event that keeps firing.
+        Hostney_Cache_Cleanup::sync_schedule();
+
+        wp_send_json_success( array(
+            'message'  => 'Settings saved.',
+            'settings' => $settings,
+        ) );
+    }
+
+    /**
+     * AJAX: How many rows each cleanup category would remove.
+     */
+    public function ajax_cleanup_counts() {
+        check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
+        }
+
+        $cleanup = new Hostney_Cache_Cleanup();
+
+        wp_send_json_success( array(
+            'counts'     => $cleanup->counts(),
+            'categories' => Hostney_Cache_Cleanup::categories(),
+        ) );
+    }
+
+    /**
+     * AJAX: Remove one batch from one cleanup category.
+     *
+     * ⚠ ONE CATEGORY PER CALL, AND ONE BATCH PER CALL. This deletes rows from a
+     * customer's database through a PHP worker, and the site has five. A "clean
+     * everything" button would hold one of them for as long as the largest
+     * table takes, which on a site with 40,000 revisions is where "the admin
+     * hung" reports come from. The browser asks again while the count is
+     * non-zero, so a backlog still clears - it just never blocks the site.
+     */
+    public function ajax_cleanup_run() {
+        check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
+        }
+
+        $category = isset( $_POST['category'] ) ? sanitize_key( wp_unslash( $_POST['category'] ) ) : '';
+        $known    = Hostney_Cache_Cleanup::categories();
+
+        if ( ! isset( $known[ $category ] ) ) {
+            wp_send_json_error( array( 'message' => 'Unknown cleanup category.' ) );
+        }
+
+        $cleanup = new Hostney_Cache_Cleanup();
+        $result  = $cleanup->clean( $category );
+
+        $message = $result['removed'] > 0
+            ? sprintf( 'Removed %s from %s.', number_format_i18n( $result['removed'] ), strtolower( $result['label'] ) )
+            : sprintf( 'Nothing left to remove from %s.', strtolower( $result['label'] ) );
+
+        if ( $result['remaining'] > 0 ) {
+            $message .= sprintf( ' %s still to go.', number_format_i18n( $result['remaining'] ) );
+        }
+
+        wp_send_json_success( array(
+            'message'   => $message,
+            'category'  => $category,
+            'removed'   => $result['removed'],
+            'remaining' => $result['remaining'],
+        ) );
     }
 
     /**

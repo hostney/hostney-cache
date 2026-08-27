@@ -16,6 +16,9 @@ $hostney_cache_endpoint_reachable = $hostney_cache_purger->check_endpoint();
 // from the purge check is what made this page report a caching problem that did
 // not exist on every HUC and staging address.
 $hostney_cache_page_cached = $hostney_cache_purger->detect_page_cache();
+
+// Tuning + cleanup settings (1.3.0). One autoloaded option read.
+$hostney_settings = Hostney_Cache_Settings::all();
 $hostney_cache_log = get_option( 'hostney_cache_log', array() );
 if ( ! is_array( $hostney_cache_log ) ) {
     $hostney_cache_log = array();
@@ -424,6 +427,135 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
             <?php endif; ?>
         </div>
         <?php endif; ?>
+
+        <!-- Card: Reduce background work -->
+        <div class="hostney-card">
+            <h2>Reduce background work</h2>
+            <p>
+                Turn off features this site does not use. Each one removes work WordPress would
+                otherwise do on every page view or every few seconds in the background.
+            </p>
+
+            <?php
+            // ⚠ EVERY CONTROL DEFAULTS TO OFF and reflects only what this site
+            // stored. This plugin is installed and updated by the platform, so
+            // a default that changed the front end would mean a Hostney release
+            // silently altering sites nobody asked.
+            ?>
+            <table class="hostney-checks-table">
+                <tr>
+                    <td>
+                        <label for="hostney-heartbeat-mode">Background activity</label>
+                    </td>
+                    <td>
+                        <select id="hostney-heartbeat-mode" class="hostney-setting" data-setting="heartbeat_mode">
+                            <option value="default" <?php selected( $hostney_settings['heartbeat_mode'], 'default' ); ?>>Normal</option>
+                            <option value="slow" <?php selected( $hostney_settings['heartbeat_mode'], 'slow' ); ?>>Slower (every 2 minutes)</option>
+                            <option value="minimal" <?php selected( $hostney_settings['heartbeat_mode'], 'minimal' ); ?>>Only where it is needed</option>
+                        </select>
+                        <p class="hostney-muted">
+                            An open admin tab checks in with the server every 15 seconds by default.
+                            The post editor always keeps it, so autosave and edit locking keep working.
+                        </p>
+                    </td>
+                </tr>
+            </table>
+
+            <table class="hostney-checks-table">
+                <tr>
+                    <td><label for="hostney-disable-emoji">Emoji script</label></td>
+                    <td>
+                        <label class="hostney-toggle-row">
+                            <input type="checkbox" id="hostney-disable-emoji" class="hostney-setting" data-setting="disable_emoji" <?php checked( $hostney_settings['disable_emoji'] ); ?>>
+                            <span>Remove it from the front end</span>
+                        </label>
+                        <p class="hostney-muted">Modern browsers render emoji without it. The editor keeps it either way.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <td><label for="hostney-disable-embeds">Embeds</label></td>
+                    <td>
+                        <label class="hostney-toggle-row">
+                            <input type="checkbox" id="hostney-disable-embeds" class="hostney-setting" data-setting="disable_embeds" <?php checked( $hostney_settings['disable_embeds'] ); ?>>
+                            <span>Remove the embed script and discovery links</span>
+                        </label>
+                        <p class="hostney-muted">
+                            Only affects other sites embedding <em>this</em> one. Embedding YouTube,
+                            X and the rest into your own posts is unaffected.
+                        </p>
+                    </td>
+                </tr>
+                <tr>
+                    <td><label for="hostney-disable-dashicons">Dashicons</label></td>
+                    <td>
+                        <label class="hostney-toggle-row">
+                            <input type="checkbox" id="hostney-disable-dashicons" class="hostney-setting" data-setting="disable_dashicons" <?php checked( $hostney_settings['disable_dashicons'] ); ?>>
+                            <span>Remove from the front end for signed-out visitors</span>
+                        </label>
+                        <p class="hostney-muted">
+                            Kept whenever the toolbar is showing, because the toolbar is built from them.
+                            Some themes use Dashicons too — check your site after turning this on.
+                        </p>
+                    </td>
+                </tr>
+                <tr>
+                    <td><label for="hostney-remove-head-links">Extra head tags</label></td>
+                    <td>
+                        <label class="hostney-toggle-row">
+                            <input type="checkbox" id="hostney-remove-head-links" class="hostney-setting" data-setting="remove_head_links" <?php checked( $hostney_settings['remove_head_links'] ); ?>>
+                            <span>Remove RSD, Windows Live Writer, shortlink and generator tags</span>
+                        </label>
+                        <p class="hostney-muted">Editing interfaces almost nothing still uses. Existing shortlink URLs keep working.</p>
+                    </td>
+                </tr>
+            </table>
+
+            <div class="hostney-btn-group">
+                <button id="hostney-save-settings-btn" class="hostney-btn hostney-btn-primary">Save settings</button>
+            </div>
+            <div id="hostney-settings-feedback" style="display: none;"></div>
+        </div>
+
+        <!-- Card: Database cleanup -->
+        <div class="hostney-card">
+            <h2>Database cleanup</h2>
+            <p>
+                WordPress keeps a lot it never removes: every revision of every post, drafts nobody
+                finished, comments you binned months ago. None of it is served to visitors, and all
+                of it is backed up and restored with your site.
+            </p>
+
+            <?php
+            // ⚠ THE COUNTS ARE SHOWN BEFORE ANY BUTTON DOES ANYTHING. "Remove
+            // 12,904 revisions" is a decision; "Optimise database" is a gamble
+            // with someone else's content. Loaded on demand so the page render
+            // itself stays cheap.
+            ?>
+            <button id="hostney-cleanup-scan-btn" class="hostney-btn hostney-btn-outline-neutral">Check what can be removed</button>
+            <div id="hostney-cleanup-result" class="hostney-keyspace-result" style="display: none;"></div>
+
+            <table class="hostney-checks-table" style="margin-top:18px;">
+                <tr>
+                    <td><label for="hostney-keep-revisions">Revisions to keep</label></td>
+                    <td>
+                        <input type="number" id="hostney-keep-revisions" class="hostney-setting hostney-number" data-setting="keep_revisions"
+                               min="1" max="50" value="<?php echo esc_attr( $hostney_settings['keep_revisions'] ); ?>">
+                        <p class="hostney-muted">Per post, newest first. At least one is always kept — revisions are the only undo an old edit has.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <td><label for="hostney-cleanup-schedule">Run automatically</label></td>
+                    <td>
+                        <select id="hostney-cleanup-schedule" class="hostney-setting" data-setting="cleanup_schedule">
+                            <option value="off" <?php selected( $hostney_settings['cleanup_schedule'], 'off' ); ?>>Never</option>
+                            <option value="weekly" <?php selected( $hostney_settings['cleanup_schedule'], 'weekly' ); ?>>Weekly</option>
+                            <option value="monthly" <?php selected( $hostney_settings['cleanup_schedule'], 'monthly' ); ?>>Monthly</option>
+                        </select>
+                        <p class="hostney-muted">Uses the same limits as the buttons above. Save settings to apply.</p>
+                    </td>
+                </tr>
+            </table>
+        </div>
 
         <!-- Card 3: Purge cache -->
         <div class="hostney-card">

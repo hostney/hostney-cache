@@ -276,6 +276,195 @@
             return Number(n).toLocaleString();
         }
 
+        // ── Tuning settings and database cleanup (1.3.0) ────────────────
+
+        // Collect every control marked as a setting. One form, sent whole.
+        //
+        // ⚠ SENT WHOLE ON PURPOSE. An unchecked checkbox posts nothing, so a
+        // partial payload could never turn a toggle back OFF - the server would
+        // see the key missing and keep the old true. The PHP side rebuilds from
+        // defaults for the same reason.
+        function collectSettings() {
+            var out = {};
+            $('.hostney-setting').each(function () {
+                var $el = $(this);
+                var key = $el.data('setting');
+                if (!key) {
+                    return;
+                }
+                if ($el.is(':checkbox')) {
+                    out[key] = $el.is(':checked') ? '1' : '';
+                } else {
+                    out[key] = $el.val();
+                }
+            });
+            return out;
+        }
+
+        $('#hostney-save-settings-btn').on('click', function () {
+            var $btn = $(this);
+            var $feedback = $('#hostney-settings-feedback');
+            var label = $btn.text();
+
+            $btn.prop('disabled', true).html('Saving...<span class="hostney-spinner"></span>');
+            $feedback.hide();
+
+            $.ajax({
+                url: hostneyCache.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'hostney_cache_save_settings',
+                    nonce: hostneyCache.nonce,
+                    settings: collectSettings()
+                },
+                success: function (response) {
+                    if (response.success) {
+                        $feedback.attr('class', 'hostney-success').text(response.data.message).show();
+                    } else {
+                        var msg = response.data && response.data.message ? response.data.message : 'Could not save.';
+                        $feedback.attr('class', 'hostney-error').text(msg).show();
+                    }
+                    $btn.prop('disabled', false).text(label);
+                },
+                error: function () {
+                    $feedback.attr('class', 'hostney-error').text('Network error. Please try again.').show();
+                    $btn.prop('disabled', false).text(label);
+                }
+            });
+        });
+
+        $('#hostney-cleanup-scan-btn').on('click', function () {
+            var $btn = $(this);
+            var label = $btn.text();
+
+            $btn.prop('disabled', true).html('Checking...<span class="hostney-spinner"></span>');
+
+            $.ajax({
+                url: hostneyCache.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'hostney_cache_cleanup_counts',
+                    nonce: hostneyCache.nonce
+                },
+                success: function (response) {
+                    var $out = $('#hostney-cleanup-result');
+                    if (response.success) {
+                        cleanupRender($out, response.data);
+                    } else {
+                        var msg = response.data && response.data.message ? response.data.message : 'Could not read the database.';
+                        $out.attr('class', 'hostney-error').text(msg).show();
+                    }
+                    $btn.prop('disabled', false).text(label);
+                },
+                error: function () {
+                    $('#hostney-cleanup-result').attr('class', 'hostney-error').text('Network error. Please try again.').show();
+                    $btn.prop('disabled', false).text(label);
+                }
+            });
+        });
+
+        /**
+         * Render the cleanup table.
+         *
+         * ⚠ .text() throughout. The labels are ours, but the counts come back
+         * from a database this page does not own, and building HTML by
+         * concatenation here would be the one place in this file where that
+         * habit could bite later.
+         */
+        function cleanupRender($out, data) {
+            var counts = data.counts || {};
+            var categories = data.categories || {};
+            var total = 0;
+
+            var $table = $('<table>').addClass('hostney-keyspace-table');
+            var $head = $('<tr>');
+            $head.append($('<th>').attr('scope', 'col').text('What'));
+            $head.append($('<th>').attr('scope', 'col').text('Rows'));
+            $head.append($('<th>').attr('scope', 'col').text(''));
+            $table.append($('<thead>').append($head));
+
+            var $body = $('<tbody>');
+
+            Object.keys(categories).forEach(function (key) {
+                var count = typeof counts[key] === 'number' ? counts[key] : 0;
+                total += count;
+
+                var $row = $('<tr>');
+                $row.append($('<td>').text(categories[key]));
+                $row.append($('<td>').text(formatCount(count)));
+
+                var $action = $('<td>');
+                if (count > 0) {
+                    $action.append(
+                        $('<button>')
+                            .addClass('hostney-btn hostney-btn-outline-neutral hostney-btn-small hostney-cleanup-run')
+                            .attr('type', 'button')
+                            .attr('data-category', key)
+                            .text('Remove')
+                    );
+                } else {
+                    $action.append($('<span>').addClass('hostney-muted').text('Nothing to remove'));
+                }
+                $row.append($action);
+                $body.append($row);
+            });
+
+            $table.append($body);
+            $out.attr('class', 'hostney-keyspace-result').empty().append($table);
+
+            if (total === 0) {
+                $out.append($('<p>').addClass('hostney-muted').text('Nothing to clean up. This database is already tidy.'));
+            } else {
+                $out.append(
+                    $('<p>').addClass('hostney-muted').text(
+                        'Rows are removed in batches, so a large backlog takes a few presses. ' +
+                        'That is deliberate — it keeps the site responsive while it works.'
+                    )
+                );
+            }
+
+            $out.show();
+        }
+
+        // Delegated, because the buttons are built after this file runs.
+        $(document).on('click', '.hostney-cleanup-run', function () {
+            var $btn = $(this);
+            var category = $btn.data('category');
+            var $cell = $btn.closest('tr').children('td').eq(1);
+
+            $btn.prop('disabled', true).text('Removing...');
+
+            $.ajax({
+                url: hostneyCache.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'hostney_cache_cleanup_run',
+                    nonce: hostneyCache.nonce,
+                    category: category
+                },
+                success: function (response) {
+                    if (response.success) {
+                        $cell.text(formatCount(response.data.remaining));
+                        if (response.data.remaining > 0) {
+                            // Still work to do, so the button stays. The server
+                            // caps each call; pressing again is the intended way
+                            // to clear a backlog.
+                            $btn.prop('disabled', false).text('Remove more');
+                        } else {
+                            $btn.replaceWith($('<span>').addClass('hostney-muted').text('Nothing to remove'));
+                        }
+                    } else {
+                        var msg = response.data && response.data.message ? response.data.message : 'Could not remove those rows.';
+                        $btn.prop('disabled', false).text('Remove');
+                        $('#hostney-cleanup-result').append($('<p>').addClass('hostney-error').text(msg));
+                    }
+                },
+                error: function () {
+                    $btn.prop('disabled', false).text('Remove');
+                }
+            });
+        });
+
         // Purge post cache (meta box button)
         $(document).on('click', '.hostney-purge-post-btn', function () {
             var $btn = $(this);

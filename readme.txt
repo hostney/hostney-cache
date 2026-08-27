@@ -4,7 +4,7 @@ Tags: cache, nginx, redis, memcached, performance
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.2.4
+Stable tag: 1.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -45,6 +45,13 @@ Purging the cache is instant, but it leaves the next visitor to each page waitin
 It runs in the background, **one page at a time**. A hosting account has a small, fixed number of PHP workers, and warming is by definition a stream of uncached requests - so a fast warm-up would slow the site down for real visitors while claiming to speed it up. Progress is shown on the plugin page and you can leave and come back to it.
 
 == Changelog ==
+
+= 1.3.0 =
+* New: Reduce background work. Turn off the emoji script, embeds, front-end Dashicons and the extra head tags, and slow down or limit the background activity of an open admin tab. Every option is off by default and applies only to this site
+* New: Database cleanup. Shows how many post revisions, auto-drafts, trashed posts, spam and binned comments, expired transients and orphaned rows can be removed, and removes them when you ask. Optionally weekly or monthly
+* Nothing is removed without showing you the count first, and at least one revision per post is always kept
+* Cleanup works in batches, so a large backlog takes a few presses rather than making the site unresponsive while it runs
+* The post editor always keeps its background activity, so autosave and edit locking are unaffected
 
 = 1.2.4 =
 * Fixed: cache purging silently did nothing when the site was administered over a preview (.hostney.app) address. Hostney serves a site on whichever address you visit, so WordPress reported the preview hostname as the site address, and the purge was sent to the preview instead of to the live domain. Preview addresses do not cache, so the request failed and the live cache was never cleared - edits simply did not appear, with no error anywhere
