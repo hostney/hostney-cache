@@ -389,4 +389,74 @@ class Hostney_Cache_Purger {
         // 400 means the endpoint exists but rejected the invalid action — that's fine
         return $status_code === 200 || $status_code === 400;
     }
+
+    /**
+     * Headers any of our layers may use to report page-cache state.
+     *
+     * Presence is what matters, not the value: a MISS proves the cache is there
+     * and that this request is what populated it.
+     *
+     * ⚠ ONE LIST, USED BY BOTH READERS. Hostney_Cache_Warmer::fetch() reads it
+     * too. It had its own copy, and a header added to one and not the other
+     * means the warmer and the admin page disagree about whether the same site
+     * is cached — which is exactly the class of bug this plugin keeps finding
+     * in its own formatters.
+     */
+    const CACHE_HEADERS = array( 'x-cache-status', 'x-fastcgi-cache', 'x-proxy-cache', 'cf-cache-status' );
+
+    /**
+     * Whether nginx is actually caching this site's pages.
+     *
+     * ⚠⚠ THIS IS NOT check_endpoint(), AND CONFLATING THEM WAS A REAL BUG. The
+     * admin page rendered BOTH the "Page caching" and "Purge endpoint" rows from
+     * the purge check alone, so any vhost that caches but has no purge location
+     * reported "Page caching: not detected".
+     *
+     * That combination is not hypothetical - it is what a HUC (.hostney.app) or
+     * staging address was. Those vhosts include fastcgi_caching and did not
+     * include the purge partial, so the panel told the truth about the purge
+     * endpoint and a falsehood about caching, and the falsehood is the row people
+     * act on. Somebody goes looking for a caching problem that does not exist,
+     * while the real one - a cache that can never be purged - is described as a
+     * missing endpoint.
+     *
+     * Asks the origin directly, for the same reason the purge does: the public
+     * hostname may resolve to an edge PoP, which would answer with ITS cache
+     * state rather than this server's.
+     */
+    public function detect_page_cache() {
+        // Scheme from the SITE, not is_ssl(). nginx puts $scheme in the cache
+        // key, and an admin request's own scheme is incidental.
+        $scheme = wp_parse_url( home_url(), PHP_URL_SCHEME );
+        if ( $scheme !== 'http' && $scheme !== 'https' ) {
+            $scheme = is_ssl() ? 'https' : 'http';
+        }
+
+        // phpcs:ignore PluginCheck.CodeAnalysis.Localhost.Found -- Intentional: the public hostname may answer from an edge PoP, not this origin
+        $response = wp_remote_get( $scheme . '://127.0.0.1/', array(
+            'timeout'     => 5,
+            'sslverify'   => false,
+            'redirection' => 0,
+            'headers'     => array(
+                'Host'       => $this->domain,
+                'User-Agent' => 'Hostney-Cache/' . HOSTNEY_CACHE_VERSION . ' (+https://www.hostney.com)',
+                // No cookies. A logged-in cookie makes nginx skip the cache, so
+                // the probe would report "no caching" on every site an admin
+                // ever looked at - which is every site this row is shown on.
+                'Cache-Control' => 'no-cache',
+            ),
+        ) );
+
+        if ( is_wp_error( $response ) ) {
+            return false;
+        }
+
+        foreach ( self::CACHE_HEADERS as $header ) {
+            if ( wp_remote_retrieve_header( $response, $header ) !== '' ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

@@ -10,6 +10,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 $hostney_cache_purger = new Hostney_Cache_Purger();
 $hostney_cache_domain = $hostney_cache_purger->get_domain();
 $hostney_cache_endpoint_reachable = $hostney_cache_purger->check_endpoint();
+
+// Two questions, two probes. "Can we purge?" and "is anything being cached?" are
+// independent - a vhost can do either without the other - and answering both
+// from the purge check is what made this page report a caching problem that did
+// not exist on every HUC and staging address.
+$hostney_cache_page_cached = $hostney_cache_purger->detect_page_cache();
 $hostney_cache_log = get_option( 'hostney_cache_log', array() );
 if ( ! is_array( $hostney_cache_log ) ) {
     $hostney_cache_log = array();
@@ -118,7 +124,15 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                 <tr>
                     <td>Page caching</td>
                     <td>
-                        <?php if ( $hostney_cache_endpoint_reachable ) : ?>
+                        <?php
+                        // ⚠⚠ ITS OWN CHECK. Both this row and the one below used
+                        // to be rendered from $hostney_cache_endpoint_reachable,
+                        // so a vhost that caches but has no purge location
+                        // reported "Page caching: Not detected" - which is false,
+                        // and is the row people act on. That was every HUC
+                        // (.hostney.app) and staging address.
+                        ?>
+                        <?php if ( $hostney_cache_page_cached ) : ?>
                             <span class="hostney-check-pass">Enabled</span>
                         <?php else : ?>
                             <span class="hostney-check-warn">Not detected</span>
@@ -135,6 +149,22 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                         <?php endif; ?>
                     </td>
                 </tr>
+                <?php if ( $hostney_cache_page_cached && ! $hostney_cache_endpoint_reachable ) : ?>
+                    <?php
+                    // The combination that has no single-word answer, and the one
+                    // that actually costs the customer something: pages are being
+                    // cached and nothing can clear them, so edits wait for the TTL.
+                    ?>
+                    <tr>
+                        <td colspan="2">
+                            <span class="hostney-check-fail">
+                                This site's pages are cached, but the purge endpoint is not reachable on this
+                                address, so content changes will not appear until the cache expires on its own.
+                                Contact Hostney support with the address shown above.
+                            </span>
+                        </td>
+                    </tr>
+                <?php endif; ?>
                 <tr>
                     <td>Auto-purge</td>
                     <td><span class="hostney-check-pass">Active</span></td>

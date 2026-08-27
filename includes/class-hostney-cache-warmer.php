@@ -423,8 +423,12 @@ class Hostney_Cache_Warmer {
         // Any of the headers nginx or the edge may use to report cache state.
         // Presence is what matters, not the value: a MISS proves the cache is
         // there and that this request is what populated it.
+        //
+        // ⚠ THE LIST LIVES ON THE PURGER, and there is only one of it. This had
+        // its own copy; a header added to one and not the other means the warmer
+        // and the admin page disagree about whether the same site is cached.
         $cache_header = false;
-        foreach ( array( 'x-cache-status', 'x-fastcgi-cache', 'x-proxy-cache', 'cf-cache-status' ) as $header ) {
+        foreach ( Hostney_Cache_Purger::CACHE_HEADERS as $header ) {
             if ( wp_remote_retrieve_header( $response, $header ) !== '' ) {
                 $cache_header = true;
                 break;
