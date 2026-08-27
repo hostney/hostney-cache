@@ -511,9 +511,9 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
             </table>
 
             <div class="hostney-btn-group">
-                <button id="hostney-save-settings-btn" class="hostney-btn hostney-btn-primary">Save settings</button>
+                <button class="hostney-btn hostney-btn-primary hostney-save-settings-btn">Save settings</button>
             </div>
-            <div id="hostney-settings-feedback" style="display: none;"></div>
+            <div class="hostney-settings-feedback" style="display: none;"></div>
         </div>
 
         <!-- Card: Database cleanup -->
@@ -551,10 +551,25 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                             <option value="weekly" <?php selected( $hostney_settings['cleanup_schedule'], 'weekly' ); ?>>Weekly</option>
                             <option value="monthly" <?php selected( $hostney_settings['cleanup_schedule'], 'monthly' ); ?>>Monthly</option>
                         </select>
-                        <p class="hostney-muted">Uses the same limits as the buttons above. Save settings to apply.</p>
+                        <p class="hostney-muted">Uses the same limits as the buttons above.</p>
                     </td>
                 </tr>
             </table>
+
+            <?php
+            // ⚠ A SECOND SAVE BUTTON, NOT A SECOND FORM. Both buttons submit
+            // every control on the page, because Settings::save() rebuilds the
+            // option from defaults - a per-card save that posted only its own
+            // fields would silently reset the other card back to defaults.
+            //
+            // It exists because the controls above are settings and the only
+            // Save was two cards away, so the obvious thing to do after changing
+            // one of them was to leave the page, which discarded it.
+            ?>
+            <div class="hostney-btn-group">
+                <button class="hostney-btn hostney-btn-primary hostney-save-settings-btn">Save settings</button>
+            </div>
+            <div class="hostney-settings-feedback" style="display: none;"></div>
         </div>
 
         <!-- Card 3: Purge cache -->

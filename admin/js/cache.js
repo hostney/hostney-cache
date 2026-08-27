@@ -301,9 +301,13 @@
             return out;
         }
 
-        $('#hostney-save-settings-btn').on('click', function () {
+        // Bound by CLASS, because there is a Save button on each settings card.
+        // Both submit the WHOLE form - see collectSettings.
+        $('.hostney-save-settings-btn').on('click', function () {
             var $btn = $(this);
-            var $feedback = $('#hostney-settings-feedback');
+            // Feedback goes next to the button that was pressed, not to a fixed
+            // element two cards away where it would scroll out of sight.
+            var $feedback = $btn.closest('.hostney-card').find('.hostney-settings-feedback');
             var label = $btn.text();
 
             $btn.prop('disabled', true).html('Saving...<span class="hostney-spinner"></span>');
