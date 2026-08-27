@@ -372,3 +372,81 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* ── Account keyspace ────────────────────────────────────────────────────
+   One Redis serves every site on the account, so this table is how somebody
+   sees whose entries are whose before pressing a flush button. */
+
+.hostney-shared-note {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    background: #f6f7f7;
+    border-left: 3px solid #ff9500;
+    font-size: 13px;
+    color: #16191f;
+}
+
+.hostney-muted {
+    font-size: 12px;
+    color: #656871;
+}
+
+.hostney-keyspace-result {
+    margin-top: 14px;
+}
+
+.hostney-keyspace-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.hostney-keyspace-table th {
+    padding: 8px 0;
+    border-bottom: 1px solid #dcdcde;
+    font-size: 12px;
+    font-weight: 600;
+    color: #545b64;
+    text-align: left;
+}
+
+.hostney-keyspace-table td {
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f1;
+    font-size: 13px;
+    vertical-align: middle;
+    color: #16191f;
+}
+
+.hostney-keyspace-table tr:last-child td {
+    border-bottom: none;
+}
+
+/* The entry count. Right-aligned so magnitudes line up and an outlier is
+   visible without reading every row. */
+.hostney-keyspace-table th:last-child,
+.hostney-keyspace-table td:last-child {
+    text-align: right;
+    width: 100px;
+}
+
+.hostney-keyspace-table code {
+    font-size: 12px;
+    color: #545b64;
+    background: none;
+    padding: 0;
+}
+
+.hostney-keyspace-current td {
+    font-weight: 600;
+}
+
+/* ⚠ NOT COLOUR ALONE. Unmatched entries are the row that matters most, and
+   WCAG 2.1 AA needs the distinction carried by something a colour-blind or
+   monochrome reader also gets - the row is labelled "Not matched to a site"
+   in its first cell, and the rule below is emphasis on top of that, never
+   the only signal. */
+.hostney-keyspace-orphan td {
+    color: #545b64;
+    font-style: italic;
+    border-top: 1px solid #dcdcde;
+}

@@ -4,7 +4,7 @@ Tags: cache, nginx, redis, memcached, performance
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.2.2
+Stable tag: 1.2.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -45,6 +45,19 @@ Purging the cache is instant, but it leaves the next visitor to each page waitin
 It runs in the background, **one page at a time**. A hosting account has a small, fixed number of PHP workers, and warming is by definition a stream of uncached requests - so a fast warm-up would slow the site down for real visitors while claiming to speed it up. Progress is shown on the plugin page and you can leave and come back to it.
 
 == Changelog ==
+
+= 1.2.3 =
+* Fixed: two WordPress sites on the same hosting account shared one set of object cache keys. There is one Redis or Memcached instance per account, and the cache key prefix was built from the database table prefix alone, so two installs both using the default wp_ prefix read and wrote each other's cached data. A site could serve a blank page with no error in the logs, because it was reading the other site's options and looking for a theme it does not have
+* Cache keys are now namespaced by database name, install path and table prefix, so every site on an account is isolated
+* WP_CACHE_KEY_SALT is honoured if it is defined, for installs that deliberately want to share a cache
+* Upgrading starts every affected site with an empty object cache, which fills again on the next few requests
+* Flushing the object cache now clears THIS site only. It previously emptied the whole instance, which cleared the cache of every other site on the account without telling anyone
+* Installing or removing the drop-in is likewise scoped to this site, instead of clearing the account
+* Removing the drop-in, or deactivating the plugin, now clears this site's entries and de-registers it, so nothing is left stranded in the shared instance
+* New "Flush all sites on this account" button, which names the other sites before it does anything
+* New "Account keyspace" panel showing how many entries each site holds, and how many are left over from sites that no longer exist
+* Sites register themselves in the account instance so the panel and the hostney CLI can tell whose entries are whose
+* Per-site clearing and the keyspace breakdown need Redis. Memcached cannot look up keys by prefix, so it offers only the account-wide flush and says so
 
 = 1.2.2 =
 * The admin bar item is now a menu: Purge cache, Flush and pre-fetch, and Cache settings, reachable from any page on the site. While a pre-fetch is running the menu label carries its progress

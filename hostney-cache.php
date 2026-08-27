@@ -3,7 +3,7 @@
  * Plugin Name: Hostney Cache
  * Plugin URI: https://www.hostney.com
  * Description: Automatic nginx page cache and Redis or Memcached object cache management for Hostney hosting.
- * Version: 1.2.2
+ * Version: 1.2.3
  * Author: Hostney
  * Author URI: https://www.hostney.com
  * License: GPL v2 or later
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'HOSTNEY_CACHE_VERSION', '1.2.2' );
+define( 'HOSTNEY_CACHE_VERSION', '1.2.3' );
 define( 'HOSTNEY_CACHE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'HOSTNEY_CACHE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
@@ -34,6 +34,7 @@ require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-memcached.
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-redis.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-dropin.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-object-cache.php';
+require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-registry.php';
 
 /**
  * Main plugin class
@@ -44,6 +45,9 @@ class Hostney_Cache {
 
     /** @var Hostney_Cache_Warmer Needed on the front end too: the admin bar reports run progress. */
     private $warmer;
+
+    /** @var Hostney_Cache_Object_Cache Needed on the front end too: the keyspace registry announces from any request. */
+    private $object_cache;
 
     public static function get_instance() {
         if ( null === self::$instance ) {
@@ -57,7 +61,8 @@ class Hostney_Cache {
         $object_cache = new Hostney_Cache_Object_Cache();
         $warmer       = new Hostney_Cache_Warmer( $purger );
 
-        $this->warmer = $warmer;
+        $this->warmer       = $warmer;
+        $this->object_cache = $object_cache;
 
         new Hostney_Cache_Hooks( $purger );
 
@@ -92,6 +97,15 @@ class Hostney_Cache {
         // maybe_upgrade() is one autoloaded option read when there is nothing
         // to do, which is every request but the first after an upgrade.
         add_action( 'plugins_loaded', array( $this, 'maybe_upgrade_dropin' ) );
+
+        // ⚠ FRONT END TOO, NOT admin_init. There is one Redis per ACCOUNT, so a
+        // site's keys sit in an instance its neighbours can also see and clear.
+        // A site that never announces itself is invisible in every other site's
+        // "this will also clear:" warning and in the CLI's orphan cleanup - and
+        // the sites most likely to go months without a wp-admin login are
+        // exactly the ones whose keys outlive them. Guarded by a 12-hour
+        // transient, so the usual cost is one autoloaded option read.
+        add_action( 'plugins_loaded', array( $this, 'announce_keyspace' ) );
     }
 
     /**
@@ -101,6 +115,17 @@ class Hostney_Cache {
     public function maybe_upgrade_dropin() {
         $dropin = new Hostney_Cache_Dropin();
         $dropin->maybe_upgrade();
+    }
+
+    /**
+     * Record this site in the account-wide keyspace registry.
+     *
+     * See Hostney_Cache_Registry for why a registry is needed at all: the key
+     * prefix is a one-way hash, so a site can never recognise a neighbour's
+     * keys without one.
+     */
+    public function announce_keyspace() {
+        $this->object_cache->registry()->maybe_announce();
     }
 
     /**
@@ -150,6 +175,17 @@ class Hostney_Cache {
         wp_clear_scheduled_hook( Hostney_Cache_Warmer::CRON_HOOK );
         delete_option( Hostney_Cache_Warmer::STATE_OPTION );
         delete_option( Hostney_Cache_Warmer::QUEUE_OPTION );
+
+        // Clear and de-register this site's keys BEFORE the drop-in goes. The
+        // prefix comes from the drop-in, so once it is removed nothing can work
+        // out which keys were ours - they would sit in the account's shared
+        // Redis as unattributable entries, counting against the memory limit of
+        // sites that had nothing to do with them, until eviction.
+        $prefix = $this->object_cache->registry()->local_prefix();
+        $this->object_cache->flush_site();
+        if ( $prefix !== '' ) {
+            $this->object_cache->registry()->forget( $prefix );
+        }
 
         // Remove our object cache drop-in, and only ours. Leaving it behind
         // would be worse than removing it: object-cache.php keeps loading after

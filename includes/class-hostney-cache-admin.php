@@ -46,7 +46,16 @@ class Hostney_Cache_Admin {
         // nothing external breaks - but they must move together, and a stale
         // browser cache during the upgrade will simply get "Bad Request" from
         // admin-ajax until it reloads.
-        add_action( 'wp_ajax_hostney_object_cache_flush', array( $this, 'ajax_object_cache_flush' ) );
+        // ⚠ THIS ACTION NOW MEANS "THIS SITE ONLY". It used to flush the whole
+        // instance, i.e. every site on the account. Repointing the EXISTING name
+        // at the narrower operation is deliberate: a browser holding cached JS
+        // from an older version keeps working, and what it does is the safe half
+        // of what it used to do. Adding the scoped call under a new name and
+        // leaving this one account-wide would have had exactly the reverse
+        // property.
+        add_action( 'wp_ajax_hostney_object_cache_flush', array( $this, 'ajax_object_cache_flush_site' ) );
+        add_action( 'wp_ajax_hostney_object_cache_flush_account', array( $this, 'ajax_object_cache_flush_account' ) );
+        add_action( 'wp_ajax_hostney_object_cache_keyspace', array( $this, 'ajax_object_cache_keyspace' ) );
 
         // Form POST handlers — drop-in (redirect-based, not AJAX)
         add_action( 'admin_post_hostney_object_cache_install_dropin', array( $this, 'handle_install_dropin' ) );
@@ -258,22 +267,96 @@ class Hostney_Cache_Admin {
     }
 
     /**
-     * AJAX: Flush the object cache, whichever engine is running.
+     * AJAX: Flush THIS site's object cache entries only.
      */
-    public function ajax_object_cache_flush() {
+    public function ajax_object_cache_flush_site() {
         check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
 
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
         }
 
-        $result = $this->object_cache->flush();
+        $result = $this->object_cache->flush_site();
 
         if ( $result['success'] ) {
             wp_send_json_success( array( 'message' => $result['message'] ) );
         } else {
             wp_send_json_error( array( 'message' => $result['message'] ) );
         }
+    }
+
+    /**
+     * AJAX: Flush every site on the account.
+     *
+     * ⚠ THE CONFIRMATION IS NOT ENOUGH ON ITS OWN. The browser dialog names the
+     * other sites, but a dialog is advisory - this re-reads the registry and
+     * puts the affected sites in the RESPONSE, so what actually happened is
+     * recorded in what the customer is shown rather than only in what they were
+     * asked. `confirmed` is required so this can never be triggered by a stale
+     * or replayed request that was aimed at the scoped flush.
+     */
+    public function ajax_object_cache_flush_account() {
+        check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
+        }
+
+        if ( ! isset( $_POST['confirmed'] ) || $_POST['confirmed'] !== '1' ) {
+            wp_send_json_error( array( 'message' => 'This action clears every site on the account and was not confirmed.' ) );
+        }
+
+        $others = $this->object_cache->registry()->other_sites();
+        $result = $this->object_cache->flush();
+
+        if ( ! $result['success'] ) {
+            wp_send_json_error( array( 'message' => $result['message'] ) );
+        }
+
+        $message = 'Object cache cleared for every site on this account.';
+        if ( ! empty( $others ) ) {
+            $labels = array();
+            foreach ( $others as $site ) {
+                $labels[] = Hostney_Cache_Registry::label( $site );
+            }
+            $message .= ' This also cleared: ' . implode( ', ', $labels ) . '.';
+        }
+
+        wp_send_json_success( array( 'message' => $message ) );
+    }
+
+    /**
+     * AJAX: Key counts grouped by site.
+     *
+     * ⚠ ON DEMAND ONLY, NEVER ON PAGE RENDER. This walks the whole keyspace of
+     * an instance that is serving other people's live sites. It is behind a
+     * button so that cost is always something a human just asked for.
+     */
+    public function ajax_object_cache_keyspace() {
+        check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
+        }
+
+        // Make sure this site is in the list it is about to render. Otherwise
+        // the first thing a new site shows you is a breakdown that does not
+        // include the site you are looking at.
+        $this->object_cache->registry()->announce();
+
+        $keyspace = $this->object_cache->keyspace();
+        if ( $keyspace === null ) {
+            $backend = $this->object_cache->active_backend();
+            wp_send_json_error(
+                array(
+                    'message' => $backend
+                        ? $backend->get_label() . ' cannot list what is in its cache, so a per-site breakdown is not available on this engine.'
+                        : 'No object cache is running for this account.',
+                )
+            );
+        }
+
+        wp_send_json_success( $keyspace );
     }
 
     /**
@@ -298,11 +381,29 @@ class Hostney_Cache_Admin {
         );
 
         if ( $result['success'] ) {
-            // Start clean. A drop-in installed over a cache that already holds
-            // entries written by a DIFFERENT drop-in would read someone else's
-            // key format as its own.
-            $this->object_cache->flush();
+            // ⚠⚠ THIS USED TO CALL flush(), WHICH EMPTIES THE WHOLE INSTANCE.
+            // On a shared per-account Redis that meant installing a drop-in on
+            // one site dropped every neighbour's cache - a stall on somebody
+            // else's site, caused by an action they never took and are never
+            // told about.
+            //
+            // Scoped now, and NOT widened when the scope cannot be worked out.
+            // On a FIRST install the prefix is unknowable here by construction:
+            // it is defined by the drop-in, and the drop-in did not exist when
+            // this request booted, so $GLOBALS['wp_object_cache'] is still the
+            // old one. flush_site() correctly declines, and declining is right -
+            // any keys already under our new prefix were written by our own
+            // drop-in from the same salt, so they are in our format and safe to
+            // read. On a REINSTALL over our own drop-in the prefix is known and
+            // this clears exactly this site.
+            $this->object_cache->flush_site();
             $this->object_cache->clear_availability_cache();
+
+            // The prefix may be brand new, and maybe_announce() would otherwise
+            // sit behind its 12-hour guard - leaving this site invisible in
+            // every other site's "who else is affected" warning for half a day,
+            // which is precisely when it matters most.
+            delete_transient( Hostney_Cache_Registry::REFRESH_TRANSIENT );
         }
 
         $redirect = add_query_arg(
@@ -328,10 +429,32 @@ class Hostney_Cache_Admin {
             wp_die( 'Unauthorized.', 403 );
         }
 
+        // ⚠ ORDER: BOTH OF THESE MUST HAPPEN BEFORE THE FILE GOES, in the sense
+        // that both depend on knowing this site's key prefix - and the prefix
+        // comes from the drop-in. It is still loaded in THIS request (it was
+        // there when the request booted, and unlinking a file does not unload
+        // it), but nothing after this request will be able to work it out. Once
+        // the drop-in is gone the keys are unattributable forever: they would
+        // sit in the account's Redis as "unknown" until eviction, counting
+        // against the memory limit of sites that had nothing to do with them.
+        $prefix  = $this->object_cache->registry()->local_prefix();
+        $cleared = $this->object_cache->flush_site();
+
+        // No return value checked on purpose. A site with no registry entry is
+        // the ordinary case on Memcached and behind a foreign drop-in, so a
+        // false here is "nothing to do", not a failure worth surfacing.
+        if ( $prefix !== '' ) {
+            $this->object_cache->registry()->forget( $prefix );
+        }
+
         $result = $this->object_cache->dropin()->remove();
 
         if ( $result['success'] ) {
             $this->object_cache->clear_availability_cache();
+
+            if ( ! empty( $cleared['deleted'] ) ) {
+                $result['message'] .= sprintf( ' %d cached entries for this site were cleared.', (int) $cleared['deleted'] );
+            }
         }
 
         $redirect = add_query_arg(

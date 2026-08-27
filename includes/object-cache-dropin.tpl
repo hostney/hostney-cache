@@ -187,7 +187,7 @@ class WP_Object_Cache {
     /** @var array Global groups — not prefixed with the blog ID */
     private $global_groups = array();
 
-    /** @var string Key prefix derived from $table_prefix */
+    /** @var string Key prefix that isolates this site's keys from every other site on the account */
     private $key_prefix = '';
 
     /** @var string Current blog prefix */
@@ -200,12 +200,71 @@ class WP_Object_Cache {
     public $cache_misses = 0;
 
     public function __construct() {
-        global $table_prefix, $blog_id;
+        global $blog_id;
 
-        $this->key_prefix  = substr( md5( $table_prefix ), 0, 8 ) . ':';
+        $this->key_prefix  = substr( md5( $this->site_salt() ), 0, 12 ) . ':';
         $this->blog_prefix = ( function_exists( 'is_multisite' ) && is_multisite() ? (int) $blog_id : 1 ) . ':';
 
         $this->connect();
+    }
+
+    /**
+     * The string that makes this site's keys its own.
+     *
+     * ⚠⚠ THERE IS ONE REDIS (AND ONE MEMCACHED) PER LINUX ACCOUNT, NOT PER SITE.
+     * Both socket paths are built from the account username - see connect() -
+     * so EVERY domain on an account shares one instance and one database. This
+     * prefix is the ONLY thing keeping their keyspaces apart, which makes it a
+     * correctness boundary rather than a tidiness one.
+     *
+     * ⚠⚠ IT USED TO BE md5($table_prefix) ALONE, AND THAT IS NOT UNIQUE PER
+     * SITE. Two WordPress installs on one account both using the default `wp_`
+     * hash to the same value, so they shared every key. The visible failure is
+     * a WHITE SCREEN WITH NO ERROR: the second site reads the first site's
+     * cached `alloptions`, so `template` and `stylesheet` name a theme that is
+     * not installed there, the template loader finds no file to include, and
+     * WordPress returns an empty 200. Nothing is logged, because nothing went
+     * wrong from PHP's point of view. Deactivating the plugin removes the
+     * drop-in, options come from the database again and the site returns -
+     * which makes the plugin look like the culprit rather than the collision.
+     * (Hostney pins WP_HOME/WP_SITEURL per request from the Host header, so not
+     * even a redirect to the other domain gives it away.)
+     *
+     * DB_NAME is the discriminator that actually matters here - every Hostney
+     * site gets its own database. ABSPATH covers the case it cannot: two
+     * installs sharing one database, which is exactly what $table_prefix was
+     * reaching for. $table_prefix stays in for the same reason. All three are
+     * cheap; a wrong answer here is silent cross-site data bleed, so this is not
+     * the place to be minimal.
+     *
+     * ⚠ CHANGING THIS SALT INVALIDATES EVERY EXISTING KEY. That is a cold cache
+     * on the next request, not an outage, and it is the intended effect of the
+     * upgrade: keys written under the colliding prefix are not trustworthy and
+     * must not be read back.
+     *
+     * WP_CACHE_KEY_SALT is honoured first because it is the de-facto convention
+     * across object cache drop-ins, and it is the escape hatch for anyone who
+     * needs two installs to deliberately SHARE a cache.
+     */
+    private function site_salt() {
+        if ( defined( 'WP_CACHE_KEY_SALT' ) && WP_CACHE_KEY_SALT !== '' ) {
+            return (string) WP_CACHE_KEY_SALT;
+        }
+
+        global $table_prefix;
+
+        // wp-settings.php globalises $table_prefix and starts the object cache
+        // in that order, so it is set by the time this runs. Cast anyway: an
+        // unset one would make md5('') the prefix for every site on the box,
+        // i.e. the exact collision this function exists to prevent.
+        return implode(
+            '|',
+            array(
+                defined( 'DB_NAME' ) ? (string) DB_NAME : '',
+                defined( 'ABSPATH' ) ? (string) ABSPATH : '',
+                (string) $table_prefix,
+            )
+        );
     }
 
     /**
@@ -794,6 +853,25 @@ class WP_Object_Cache {
     /** Which engine is serving, for the plugin's admin page and for debugging. */
     public function hostney_engine() {
         return $this->connected ? $this->engine : '';
+    }
+
+    /**
+     * This site's key prefix, including the trailing colon.
+     *
+     * ⚠⚠ THE PLUGIN MUST READ THE PREFIX FROM HERE AND NEVER RECOMPUTE IT.
+     * The salt lives in site_salt() in this file and nowhere else. A second
+     * implementation in the plugin would be a copy that has to be kept in step
+     * by hand, and the failure is silent in the worst possible way: the plugin
+     * would register the wrong prefix in the account registry, then "flush this
+     * site" would scan for keys that do not exist while the site's real keys
+     * sat untouched - reporting success and doing nothing.
+     *
+     * Returned unconditionally, not gated on $this->connected. The prefix is a
+     * property of the SITE, not of the connection, and the registry and the
+     * admin page both want it even when no engine is answering.
+     */
+    public function hostney_key_prefix() {
+        return $this->key_prefix;
     }
 
     /**

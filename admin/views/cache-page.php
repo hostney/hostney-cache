@@ -40,6 +40,31 @@ $hostney_oc_dropin_ours = in_array( $hostney_oc_dropin, array( 'installed', 'out
 $hostney_oc_label       = $hostney_oc_installable ? $hostney_oc_installable->get_label() : 'Object cache';
 $hostney_oc_socket      = $hostney_oc_installable ? $hostney_oc_installable->get_socket_path() : '';
 
+// ── Account keyspace ────────────────────────────────────────────────────────
+// There is ONE Redis (or Memcached) per ACCOUNT, not per site, so the flush
+// buttons below are the difference between clearing your own cache and clearing
+// your neighbour's. See Hostney_Cache_Registry for why the mapping from key
+// prefix to site has to be recorded rather than derived.
+//
+// ⚠ THE TWO CALLS HERE ARE CHEAP AND THE ONE ON THE BUTTON IS NOT. announce()
+// is a single HSET and other_sites() a single HGETALL, both O(1)-ish and fine
+// on a page render. The per-site key BREAKDOWN walks the whole keyspace and is
+// deliberately not here - it is behind a button, in scan_keyspace().
+$hostney_oc_registry = $hostney_oc->registry();
+$hostney_oc_scoped   = $hostney_oc_active ? $hostney_oc_active->supports_scoped_flush() : false;
+$hostney_oc_others   = array();
+
+if ( $hostney_oc_active && $hostney_oc_active->supports_keyspace_registry() ) {
+    // Announce on every render of this page, not just on the 12-hour schedule.
+    // Somebody looking at this page is the one person most likely to press a
+    // button whose blast radius depends on the list being current.
+    $hostney_oc_registry->announce();
+
+    foreach ( $hostney_oc_registry->other_sites() as $hostney_oc_other ) {
+        $hostney_oc_others[] = Hostney_Cache_Registry::label( $hostney_oc_other );
+    }
+}
+
 // Check for redirect notices from drop-in install/remove
 $hostney_notice_type = isset( $_GET['hostney-notice'] ) ? sanitize_key( $_GET['hostney-notice'] ) : '';
 $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( rawurldecode( $_GET['hostney-message'] ) ) : '';
@@ -203,8 +228,43 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                     <?php endif; ?>
                 </table>
 
+                <?php if ( ! empty( $hostney_oc_others ) ) : ?>
+                    <p class="hostney-shared-note">
+                        This account's <?php echo esc_html( $hostney_oc_label ); ?> is shared with
+                        <strong><?php echo esc_html( implode( ', ', $hostney_oc_others ) ); ?></strong>.
+                        Each site's entries are kept separate, so clearing this site does not affect them.
+                    </p>
+                <?php endif; ?>
+
                 <div class="hostney-btn-group">
-                    <button id="hostney-object-cache-flush-btn" class="hostney-btn hostney-btn-primary">Flush object cache</button>
+                    <?php if ( $hostney_oc_scoped ) : ?>
+                        <button id="hostney-object-cache-flush-btn" class="hostney-btn hostney-btn-primary">Flush this site</button>
+                        <?php
+                        // ⚠ THE OTHER SITES' NAMES RIDE ON THE BUTTON so the
+                        // confirmation can name them without a round trip. They
+                        // are re-read server-side before anything is deleted -
+                        // this attribute is for the wording of the question, and
+                        // is never what the flush acts on.
+                        ?>
+                        <button
+                            id="hostney-object-cache-flush-account-btn"
+                            class="hostney-btn hostney-btn-outline-neutral"
+                            data-others="<?php echo esc_attr( wp_json_encode( $hostney_oc_others ) ); ?>"
+                        >Flush all sites on this account</button>
+                    <?php else : ?>
+                        <?php
+                        // Memcached. It has no SCAN and no way to match keys by
+                        // prefix, so "clear one site" is not an operation the
+                        // protocol can express. One button, and the label says
+                        // what it really does rather than implying a scope it
+                        // does not have.
+                        ?>
+                        <button
+                            id="hostney-object-cache-flush-account-btn"
+                            class="hostney-btn hostney-btn-primary"
+                            data-others="<?php echo esc_attr( wp_json_encode( $hostney_oc_others ) ); ?>"
+                        >Flush object cache (all sites)</button>
+                    <?php endif; ?>
                     <?php if ( $hostney_oc_dropin === 'not_installed' ) : ?>
                         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
                             <?php wp_nonce_field( 'hostney_dropin_action', '_hostney_nonce' ); ?>
@@ -271,6 +331,42 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
 
             <div id="hostney-object-cache-feedback" style="display: none;"></div>
         </div>
+
+        <?php if ( $hostney_oc_active ) : ?>
+        <!-- Card: Account keyspace -->
+        <div class="hostney-card">
+            <h2>Account keyspace</h2>
+
+            <?php if ( $hostney_oc_scoped ) : ?>
+                <p>
+                    Your account has one <?php echo esc_html( $hostney_oc_label ); ?> instance shared by every site on it.
+                    Each site's entries are stored under its own prefix. This shows how many entries each site is holding,
+                    so you can see what is using the memory before clearing anything.
+                </p>
+                <p class="hostney-muted">
+                    <?php
+                    // Say the cost out loud. Somebody who understands that this
+                    // reads every key will press it when it is a good idea and
+                    // not in a loop while debugging.
+                    ?>
+                    This reads every key in the instance, so run it when you need it rather than repeatedly.
+                </p>
+
+                <button id="hostney-keyspace-scan-btn" class="hostney-btn hostney-btn-outline-neutral">Scan keyspace</button>
+                <div id="hostney-keyspace-result" class="hostney-keyspace-result" style="display: none;"></div>
+            <?php else : ?>
+                <p>
+                    Your account has one <?php echo esc_html( $hostney_oc_label ); ?> instance shared by every site on it.
+                    Each site's entries are stored under its own prefix, so the sites stay separate.
+                </p>
+                <p>
+                    <?php echo esc_html( $hostney_oc_label ); ?> cannot list what it is holding, so a per-site breakdown
+                    is not available on this engine, and neither is clearing a single site.
+                    Both are available on Redis.
+                </p>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
 
         <!-- Card 3: Purge cache -->
         <div class="hostney-card">

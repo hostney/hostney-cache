@@ -61,15 +61,26 @@
             });
         });
 
-        // Flush the object cache, whichever engine is running (admin page button).
+        // ── Object cache flushing ───────────────────────────────────────
+        // There is ONE Redis per ACCOUNT, so these two buttons differ by blast
+        // radius, not by wording. Keep them visibly different.
+        //
         // ⚠ Ids and the AJAX action were renamed from hostney-memcached-* in
-        // 1.2.0; admin/views/cache-page.php and class-hostney-cache-admin.php
-        // moved in the same commit. All three are in this plugin.
+        // 1.2.0, and the action hostney_object_cache_flush was re-pointed at the
+        // SCOPED flush in 1.2.3. admin/views/cache-page.php and
+        // class-hostney-cache-admin.php move with this file; all three are in
+        // this plugin.
+
+        // Flush this site's entries only.
         $('#hostney-object-cache-flush-btn').on('click', function () {
             var $btn = $(this);
             var $feedback = $('#hostney-object-cache-feedback');
+            // ⚠ Captured, not hardcoded. The old handler restored the literal
+            // "Flush object cache", so renaming the button in the view would
+            // silently rename it back on the first click.
+            var label = $btn.text();
 
-            $btn.prop('disabled', true).html('Flushing...<span class="hostney-spinner"></span>');
+            $btn.prop('disabled', true).html('Clearing...<span class="hostney-spinner"></span>');
             $feedback.hide();
 
             $.ajax({
@@ -86,14 +97,184 @@
                         var msg = response.data && response.data.message ? response.data.message : 'Flush failed.';
                         $feedback.attr('class', 'hostney-error').text(msg).show();
                     }
-                    $btn.prop('disabled', false).text('Flush object cache');
+                    $btn.prop('disabled', false).text(label);
                 },
                 error: function () {
                     $feedback.attr('class', 'hostney-error').text('Network error. Please try again.').show();
-                    $btn.prop('disabled', false).text('Flush object cache');
+                    $btn.prop('disabled', false).text(label);
                 }
             });
         });
+
+        // Flush every site on the account.
+        $('#hostney-object-cache-flush-account-btn').on('click', function () {
+            var $btn = $(this);
+            var $feedback = $('#hostney-object-cache-feedback');
+            var label = $btn.text();
+            var others = [];
+
+            try {
+                others = JSON.parse($btn.attr('data-others') || '[]');
+            } catch (e) {
+                // A malformed attribute must not degrade into a SILENT
+                // account-wide flush. Fall back to the vaguer warning rather
+                // than to no warning.
+                others = [];
+            }
+
+            // ⚠ NAME THE SITES. "Are you sure?" gives somebody nothing to be
+            // sure ABOUT, and the whole reason this dialog exists is that the
+            // person pressing it may not know anyone else is on the instance.
+            var nl = String.fromCharCode(10);
+            var question = others.length
+                ? 'This clears the object cache for every site on this account, including:' +
+                  nl + nl + others.join(nl) + nl + nl +
+                  'Those sites will run slower until their caches rebuild. Continue?'
+                : 'This clears the object cache for every site on this account. Continue?';
+
+            if (!window.confirm(question)) {
+                return;
+            }
+
+            $btn.prop('disabled', true).html('Clearing...<span class="hostney-spinner"></span>');
+            $feedback.hide();
+
+            $.ajax({
+                url: hostneyCache.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'hostney_object_cache_flush_account',
+                    nonce: hostneyCache.nonce,
+                    confirmed: '1'
+                },
+                success: function (response) {
+                    if (response.success) {
+                        $feedback.attr('class', 'hostney-success').text(response.data.message).show();
+                    } else {
+                        var msg = response.data && response.data.message ? response.data.message : 'Flush failed.';
+                        $feedback.attr('class', 'hostney-error').text(msg).show();
+                    }
+                    $btn.prop('disabled', false).text(label);
+                },
+                error: function () {
+                    $feedback.attr('class', 'hostney-error').text('Network error. Please try again.').show();
+                    $btn.prop('disabled', false).text(label);
+                }
+            });
+        });
+
+        // Per-site key breakdown for the account instance.
+        $('#hostney-keyspace-scan-btn').on('click', function () {
+            var $btn = $(this);
+            var $out = $('#hostney-keyspace-result');
+            var label = $btn.text();
+
+            $btn.prop('disabled', true).html('Scanning...<span class="hostney-spinner"></span>');
+            $out.hide().empty();
+
+            $.ajax({
+                url: hostneyCache.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'hostney_object_cache_keyspace',
+                    nonce: hostneyCache.nonce
+                },
+                success: function (response) {
+                    if (response.success) {
+                        keyspaceRender($out, response.data);
+                    } else {
+                        var msg = response.data && response.data.message ? response.data.message : 'Could not read the keyspace.';
+                        $out.attr('class', 'hostney-error').text(msg).show();
+                    }
+                    $btn.prop('disabled', false).text(label);
+                },
+                error: function () {
+                    $out.attr('class', 'hostney-error').text('Network error. Please try again.').show();
+                    $btn.prop('disabled', false).text(label);
+                }
+            });
+        });
+
+        /**
+         * Render the keyspace breakdown.
+         *
+         * ⚠ BUILT WITH .text(), NEVER CONCATENATED HTML. Site labels come from
+         * other sites' home_url on the same account, i.e. from a database this
+         * page does not own. Doing it properly costs nothing here, and the
+         * alternative is stored XSS reachable by any neighbour on the account.
+         */
+        function keyspaceRender($out, data) {
+            var $table = $('<table>').addClass('hostney-keyspace-table');
+            var $head = $('<tr>');
+            $head.append($('<th>').attr('scope', 'col').text('Site'));
+            $head.append($('<th>').attr('scope', 'col').text('Prefix'));
+            $head.append($('<th>').attr('scope', 'col').text('Entries'));
+            $table.append($('<thead>').append($head));
+
+            var $body = $('<tbody>');
+            var sites = data.sites || [];
+            var counts = data.counts || {};
+            var i;
+
+            for (i = 0; i < sites.length; i++) {
+                var site = sites[i];
+                var name = site.home || site.abspath || 'Unidentified site';
+                var $row = $('<tr>');
+
+                if (site.is_current) {
+                    $row.addClass('hostney-keyspace-current');
+                    name = name + ' (this site)';
+                }
+
+                $row.append($('<td>').text(name));
+                $row.append($('<td>').append($('<code>').text(site.prefix)));
+                $row.append($('<td>').text(formatCount(counts[site.prefix])));
+                $body.append($row);
+            }
+
+            // Keys matching no registered site. This is what a removed domain
+            // leaves behind, so the row is shown even at zero - an absent row
+            // reads as "not measured" rather than "none".
+            var $orphan = $('<tr>').addClass('hostney-keyspace-orphan');
+            $orphan.append($('<td>').text('Not matched to a site'));
+            $orphan.append($('<td>').text('—'));
+            $orphan.append($('<td>').text(formatCount(data.unknown)));
+            $body.append($orphan);
+
+            $table.append($body);
+            $out.attr('class', 'hostney-keyspace-result').empty().append($table);
+
+            if (data.partial) {
+                // A capped scan must never read as a complete one.
+                $out.append(
+                    $('<p>').addClass('hostney-error').text(
+                        'Stopped at ' + formatCount(data.scanned) +
+                        ' keys. These counts are a partial view, not a total.'
+                    )
+                );
+            }
+
+            if (data.unknown > 0) {
+                $out.append(
+                    $('<p>').addClass('hostney-muted').text(
+                        'Unmatched entries are usually left behind by a site that was removed. ' +
+                        'They are cleared by the account-wide flush.'
+                    )
+                );
+            }
+
+            $out.show();
+        }
+
+        function formatCount(n) {
+            if (typeof n !== 'number' || !isFinite(n)) {
+                return '0';
+            }
+            // toLocaleString, not a thousands-separator regex. The regex form
+            // needs escapes that do not survive being pasted between tools, and
+            // this is a count in an admin table.
+            return Number(n).toLocaleString();
+        }
 
         // Purge post cache (meta box button)
         $(document).on('click', '.hostney-purge-post-btn', function () {

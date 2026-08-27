@@ -50,8 +50,69 @@ abstract class Hostney_Cache_Backend {
      */
     abstract public function get_stats();
 
-    /** @return array{success:bool,message:string} */
+    /**
+     * Empty the WHOLE instance - every site on the account.
+     *
+     * ⚠⚠ THE NAME IS NOT SCOPED AND NEITHER IS THE EFFECT. One Redis and one
+     * Memcached serve the entire account, so this clears the neighbours' caches
+     * too. Prefer flush_prefix() and only call this when the customer has been
+     * told, by name, whose cache goes with it.
+     *
+     * @return array{success:bool,message:string}
+     */
     abstract public function flush();
+
+    /* ── Per-site keyspace operations ────────────────────────────────────
+       Redis only. The defaults below are the honest Memcached answer, so
+       Memcached needs no implementation and cannot accidentally inherit a
+       half-working one.
+       ──────────────────────────────────────────────────────────────────── */
+
+    /**
+     * Whether this engine can clear ONE site without touching the rest.
+     *
+     * ⚠ FALSE ON MEMCACHED, PERMANENTLY. The protocol has no SCAN and no way to
+     * enumerate or match keys, so there is no operation that deletes "the keys
+     * beginning with X". This is a property of the protocol, not a gap in this
+     * plugin, and the UI says so rather than hiding the button.
+     */
+    public function supports_scoped_flush() {
+        return false;
+    }
+
+    /**
+     * Whether this engine can hold the account keyspace registry.
+     *
+     * Same limitation, one step removed: the registry is a hash that has to be
+     * read back field by field, which Memcached cannot enumerate either.
+     */
+    public function supports_keyspace_registry() {
+        return false;
+    }
+
+    /**
+     * Delete every key belonging to one site.
+     *
+     * @param  string $prefix Key prefix including its trailing colon.
+     * @return array{success:bool,message:string,deleted:int}
+     */
+    public function flush_prefix( $prefix ) {
+        return array(
+            'success' => false,
+            'deleted' => 0,
+            'message' => $this->get_label() . ' cannot clear one site on its own. It has no way to look up keys by prefix, so the only flush it offers clears every site on this account.',
+        );
+    }
+
+    /**
+     * Count the keys in the instance, grouped by the prefixes given.
+     *
+     * @param  string[] $prefixes Known site prefixes.
+     * @return array|null Null when the engine cannot enumerate its keyspace.
+     */
+    public function scan_keyspace( $prefixes ) {
+        return null;
+    }
 
     /**
      * The Linux account PHP is running as. Both engines' socket paths are
