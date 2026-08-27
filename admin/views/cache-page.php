@@ -135,20 +135,47 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                         <?php if ( $hostney_cache_page_cached ) : ?>
                             <span class="hostney-check-pass">Enabled</span>
                         <?php else : ?>
-                            <span class="hostney-check-warn">Not detected</span>
+                            <span>Not used on this address</span>
                         <?php endif; ?>
                     </td>
                 </tr>
                 <tr>
                     <td>Purge endpoint</td>
                     <td>
+                        <?php
+                        // ⚠⚠ THREE STATES, NOT TWO, AND THE THIRD IS THE COMMON ONE.
+                        // "No page cache AND no purge endpoint" is not a fault - it
+                        // is a vhost that does not cache, which every preview
+                        // (.hostney.app) address is by design: the HUC template
+                        // vars hardcode is_caching=0, so neither the cache nor the
+                        // purge location is rendered. Showing a red "Not reachable"
+                        // there reports a broken site to somebody whose site is
+                        // fine, and it cost a real afternoon of chasing a caching
+                        // problem that did not exist.
+                        //
+                        // The genuinely broken combination is cached-but-unpurgeable
+                        // and it keeps its red, below.
+                        ?>
                         <?php if ( $hostney_cache_endpoint_reachable ) : ?>
                             <span class="hostney-check-pass">Available</span>
-                        <?php else : ?>
+                        <?php elseif ( $hostney_cache_page_cached ) : ?>
                             <span class="hostney-check-fail">Not reachable</span>
+                        <?php else : ?>
+                            <span>Not required</span>
                         <?php endif; ?>
                     </td>
                 </tr>
+                <?php if ( ! $hostney_cache_page_cached && ! $hostney_cache_endpoint_reachable ) : ?>
+                    <tr>
+                        <td colspan="2">
+                            <span class="hostney-muted">
+                                This address does not use the page cache, so there is nothing to purge here.
+                                Preview addresses never cache. Object caching below is unaffected, and if this
+                                site also answers on its own domain, that address caches and purges normally.
+                            </span>
+                        </td>
+                    </tr>
+                <?php endif; ?>
                 <?php if ( $hostney_cache_page_cached && ! $hostney_cache_endpoint_reachable ) : ?>
                     <?php
                     // The combination that has no single-word answer, and the one
@@ -401,11 +428,28 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
         <!-- Card 3: Purge cache -->
         <div class="hostney-card">
             <h2>Purge cache</h2>
-            <p>Clear all cached pages for this site. Use this if content changes are not reflecting.</p>
 
-            <button id="hostney-purge-all-btn" class="hostney-btn hostney-btn-primary">Purge all cache</button>
+            <?php if ( ! $hostney_cache_page_cached && ! $hostney_cache_endpoint_reachable ) : ?>
+                <?php
+                // ⚠ THE BUTTON USED TO BE OFFERED UNCONDITIONALLY, and on an
+                // address with no page cache it answered "HTTP 404" in red. That
+                // is a true statement about a request nobody should have been
+                // invited to make: there is no purge location on a vhost that
+                // does not cache. Offering an action that cannot work, and then
+                // reporting its failure as an error, is how a working site gets
+                // diagnosed as a broken one.
+                ?>
+                <p>
+                    There are no cached pages to clear on this address, so there is nothing to purge.
+                    Object caching is separate and is managed above.
+                </p>
+            <?php else : ?>
+                <p>Clear all cached pages for this site. Use this if content changes are not reflecting.</p>
 
-            <div id="hostney-purge-feedback" style="display: none;"></div>
+                <button id="hostney-purge-all-btn" class="hostney-btn hostney-btn-primary">Purge all cache</button>
+
+                <div id="hostney-purge-feedback" style="display: none;"></div>
+            <?php endif; ?>
         </div>
 
         <!-- Card 4: Flush and pre-fetch -->
