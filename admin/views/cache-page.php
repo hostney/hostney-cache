@@ -143,7 +143,7 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
     <div id="hostney-cache-container">
         <div class="hostney-panel" role="tabpanel" id="hostney-panel-overview" data-panel="overview" aria-labelledby="hostney-tab-overview">
         <!-- Card 1: Status -->
-        <div class="hostney-card hostney-card-accent">
+        <div class="hostney-card">
             <span class="hostney-status-badge hostney-status-badge-active">Active</span>
             <h2>Cache management</h2>
             <p>Automatic cache purging is enabled for this site.</p>
