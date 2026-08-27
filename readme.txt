@@ -4,7 +4,7 @@ Tags: cache, nginx, redis, memcached, performance
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.2.3
+Stable tag: 1.2.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -45,6 +45,12 @@ Purging the cache is instant, but it leaves the next visitor to each page waitin
 It runs in the background, **one page at a time**. A hosting account has a small, fixed number of PHP workers, and warming is by definition a stream of uncached requests - so a fast warm-up would slow the site down for real visitors while claiming to speed it up. Progress is shown on the plugin page and you can leave and come back to it.
 
 == Changelog ==
+
+= 1.2.4 =
+* Fixed: cache purging silently did nothing when the site was administered over a preview (.hostney.app) address. Hostney serves a site on whichever address you visit, so WordPress reported the preview hostname as the site address, and the purge was sent to the preview instead of to the live domain. Preview addresses do not cache, so the request failed and the live cache was never cleared - edits simply did not appear, with no error anywhere
+* Purges are now always addressed to the site's own domain, whichever address you are signed in on
+* The plugin page reports on the live domain for the same reason, so what it shows and what the buttons act on can no longer disagree
+* Requires the Hostney platform helper, which is installed automatically. Until it arrives, the plugin behaves exactly as before
 
 = 1.2.3 =
 * Fixed: two WordPress sites on the same hosting account shared one set of object cache keys. There is one Redis or Memcached instance per account, and the cache key prefix was built from the database table prefix alone, so two installs both using the default wp_ prefix read and wrote each other's cached data. A site could serve a blank page with no error in the logs, because it was reading the other site's options and looking for a theme it does not have

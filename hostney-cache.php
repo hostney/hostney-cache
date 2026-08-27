@@ -3,7 +3,7 @@
  * Plugin Name: Hostney Cache
  * Plugin URI: https://www.hostney.com
  * Description: Automatic nginx page cache and Redis or Memcached object cache management for Hostney hosting.
- * Version: 1.2.3
+ * Version: 1.2.4
  * Author: Hostney
  * Author URI: https://www.hostney.com
  * License: GPL v2 or later
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'HOSTNEY_CACHE_VERSION', '1.2.3' );
+define( 'HOSTNEY_CACHE_VERSION', '1.2.4' );
 define( 'HOSTNEY_CACHE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'HOSTNEY_CACHE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 

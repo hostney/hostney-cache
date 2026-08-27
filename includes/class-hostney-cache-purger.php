@@ -32,11 +32,63 @@ class Hostney_Cache_Purger {
     }
 
     /**
-     * Detect the site's FQDN from WordPress home URL
+     * The hostname every purge is addressed to.
+     *
+     * ⚠⚠ THE PLATFORM CONSTANT FIRST, AND home_url() ONLY AS A FALLBACK.
+     * Hostney defines WP_HOME/WP_SITEURL per request from the incoming Host
+     * header, and WordPress filters get_option('home') through
+     * _config_wp_home() - so home_url() reports WHICHEVER ADDRESS THE CURRENT
+     * ADMIN IS BROWSING ON, not the site's own domain.
+     *
+     * That silently broke purging. Administering a LIVE site over its
+     * .hostney.app preview address made this the preview hostname, so the purge
+     * POST selected the preview vhost - which deliberately does not cache and
+     * therefore has no purge location. The request 404s and THE LIVE DOMAIN'S
+     * CACHE IS NEVER CLEARED. Nothing surfaces it except the purge log, so the
+     * symptom is "my edits do not show up" with no error anywhere.
+     *
+     * HOSTNEY_SITE_FQDN is written by the hostney-platform mu-plugin, which the
+     * discovery job regenerates on every run. A site that has not been reached
+     * yet keeps the old behaviour, which is correct on its own domain and no
+     * worse than before anywhere else.
      */
     private function detect_domain() {
+        if ( defined( 'HOSTNEY_SITE_FQDN' ) && HOSTNEY_SITE_FQDN !== '' ) {
+            return HOSTNEY_SITE_FQDN;
+        }
+
         $home = get_option( 'home' );
         return wp_parse_url( $home, PHP_URL_HOST );
+    }
+
+    /**
+     * Move a URL onto the canonical hostname.
+     *
+     * ⚠⚠ THE HOST HEADER IS NOT ENOUGH ON ITS OWN. cache_purge.lua keys on
+     * ngx.var.host AND rejects any submitted URL that does not belong to it, so
+     * sending canonical Host with preview URLs would be refused rather than
+     * silently mis-targeted. Both halves have to move together, which is why
+     * this sits in add_url() - the one funnel every purge URL passes through.
+     *
+     * Port, fragment and userinfo are dropped rather than carried: a purge URL
+     * has never had any of them, and a port surviving here would not match the
+     * cache key anyway.
+     */
+    private function canonical_url( $url ) {
+        if ( ! is_string( $url ) || $url === '' || empty( $this->domain ) ) {
+            return (string) $url;
+        }
+
+        $parts = wp_parse_url( $url );
+        if ( empty( $parts['host'] ) || $parts['host'] === $this->domain ) {
+            return $url;
+        }
+
+        $scheme = ! empty( $parts['scheme'] ) ? $parts['scheme'] : 'https';
+        $path   = ! empty( $parts['path'] ) ? $parts['path'] : '/';
+        $query  = ! empty( $parts['query'] ) ? '?' . $parts['query'] : '';
+
+        return $scheme . '://' . $this->domain . $path . $query;
     }
 
     /**
@@ -252,6 +304,14 @@ class Hostney_Cache_Purger {
      * Add an exact URL to the purge queue (deduplicated)
      */
     private function add_url( $url ) {
+        // Canonicalised HERE rather than at each call site: every purge URL in
+        // this class comes through add_url(), and a single one that skipped the
+        // rewrite would be rejected by the endpoint's own host check while the
+        // rest of the batch succeeded - a partial purge that reports success.
+        $url = $this->canonical_url( $url );
+        if ( $url === '' ) {
+            return;
+        }
         self::$urls_to_purge[ $url ] = $url;
     }
 
