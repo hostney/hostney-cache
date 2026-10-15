@@ -150,8 +150,10 @@ def main():
     if not dist_root.is_dir():
         fail(f"{dist_root} does not exist - pass the _dist folder with --dist")
 
-    if git("status", "--porcelain", "--untracked-files=all").strip():
-        fail("the working tree is not clean - a release is built from a commit; commit first")
+    dirty = git("status", "--porcelain", "--untracked-files=all").splitlines()
+    if dirty:
+        fail("the working tree is not clean - a release is built from a commit; commit first:\n  "
+             + "\n  ".join(dirty[:5]) + ("\n  ..." if len(dirty) > 5 else ""))
 
     # The versions as COMMITTED - that is what the zip will hold.
     php = git("show", f"HEAD:{SLUG}.php")
