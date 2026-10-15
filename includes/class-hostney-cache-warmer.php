@@ -15,11 +15,28 @@
  * them in parallel and the warmer takes the site down for real visitors while
  * telling the customer it is making the site faster.
  *
- * ⚠ WP-Cron rides on real traffic, and a fully cached site has very little of
- * it reaching PHP — which is exactly the site somebody just asked to warm. So
- * the admin page's progress poll also nudges cron (see Hostney_Cache_Admin).
- * While the tab is open the poll IS the engine; close it and the run continues
- * whenever the site is next hit. Neither half is load-bearing on its own.
+ * ⚠⚠ TWO ENGINES, AND THE OPEN PAGE IS THE ONE THAT ALWAYS WORKS. While the
+ * settings page - or any page showing the admin bar - is open, its progress
+ * poll warms the next page itself (advance()). With nothing open, the run
+ * continues on WP-Cron (run_batch()).
+ *
+ * Until 1.3.1 the poll only re-sent WP-Cron's request, and the docs called that
+ * "the poll is the engine". It never was: WP-Cron is a request the site sends
+ * to its OWN PUBLIC ADDRESS - out through DNS, any CDN and any proxy in front
+ * of the site, and back - and WordPress never reads the answer. Anything on
+ * that route that refuses it (a CDN challenge, a proxy, a domain that does not
+ * point here yet) stops cron with no error anywhere - and so did a cron lock
+ * that could not be kept: on every site with our drop-in and no cache service
+ * running, cron never ran at all until 1.3.1 (wp_cache_init() in
+ * object-cache-dropin.tpl). The poll re-sent the same doomed request every
+ * minute: the bar sat at "0 of N" for five minutes and then failed. The poll reaches this code over the administrator's own
+ * connection, and the page fetches go to 127.0.0.1, so it needs no public
+ * route at all. Cron also rides on real traffic, and a fully cached site has
+ * very little of it reaching PHP - which is exactly the site somebody just
+ * asked to warm.
+ *
+ * ⚠ ONE BATCH AT A TIME, WHOEVER RUNS IT: both engines take the same MySQL lock
+ * (acquire_lock()), so they take turns and never render two pages at once.
  *
  * ⚠ Fetches go to 127.0.0.1 with a Host header, exactly like the purger, NOT
  * to the public URL. Three reasons, all of which have bitten something:
@@ -66,6 +83,16 @@ class Hostney_Cache_Warmer {
     const BATCH_MAX_URLS = 100;
 
     /**
+     * How many pages one progress poll warms: one.
+     *
+     * The poll answers the browser with the new state, so it has to come back
+     * in about the time one page takes to render, and the browser waits for
+     * that answer before it asks again. One page per poll keeps the open page
+     * to the same one-render-at-a-time rule as a cron batch.
+     */
+    const POLL_MAX_URLS = 1;
+
+    /**
      * A run whose state has not moved for this long is treated as dead, so a
      * cron that was never fired (or a PHP fatal mid-batch) cannot wedge the
      * button forever.
@@ -74,6 +101,9 @@ class Hostney_Cache_Warmer {
 
     /** @var Hostney_Cache_Purger */
     private $purger;
+
+    /** @var bool Whether this request holds the run's lock right now. */
+    private $lock_held = false;
 
     public function __construct( Hostney_Cache_Purger $purger ) {
         $this->purger = $purger;
@@ -114,6 +144,10 @@ class Hostney_Cache_Warmer {
             // worth saying plainly rather than reporting a warm cache that
             // does not exist.
             'cache_seen'  => false,
+            // Which run this is. "Running" alone cannot tell a batch that its
+            // run was stopped and a new one started while it fetched - both
+            // read "running" - see is_current_run().
+            'run_id'      => '',
         );
 
         $state = get_option( self::STATE_OPTION, array() );
@@ -127,7 +161,7 @@ class Hostney_Cache_Warmer {
         // it says about itself.
         if ( $state['status'] === 'running' && ( time() - (int) $state['updated_at'] ) > self::STALE_AFTER ) {
             $state['status']  = 'failed';
-            $state['message'] = 'The warm-up stopped responding and was cancelled. Scheduled tasks may not be running on this site.';
+            $state['message'] = 'The warm-up stopped: nothing moved it on for five minutes. It moves on its own while this page is open; otherwise it waits for WordPress\'s scheduled tasks (WP-Cron), and those did not run. Start it again and keep this page open until it finishes.';
         }
 
         return $state;
@@ -209,6 +243,7 @@ class Hostney_Cache_Warmer {
             'current'     => '',
             'message'     => '',
             'cache_seen'  => false,
+            'run_id'      => wp_generate_uuid4(),
         ), false );
 
         $this->schedule_next();
@@ -241,12 +276,13 @@ class Hostney_Cache_Warmer {
     }
 
     /**
-     * Queue the next batch and try to make it run now.
+     * Queue the next cron batch and try to make it run now.
      *
-     * ⚠ spawn_cron() is a best-effort nudge, not a guarantee — it declines if
-     * another spawn happened in the last 60s (WP_CRON_LOCK_TIMEOUT), and it
-     * does nothing at all under DISABLE_WP_CRON. That is the case the admin
-     * poll covers.
+     * ⚠ spawn_cron() is a best-effort nudge, not a guarantee. It declines if
+     * another spawn happened in the last 60s (WP_CRON_LOCK_TIMEOUT), it fires
+     * at the site's public address without waiting for an answer, and inside a
+     * cron request it does nothing. That is why an open page warms pages itself
+     * (advance()) instead of relying on this.
      */
     private function schedule_next() {
         if ( ! wp_next_scheduled( self::CRON_HOOK ) ) {
@@ -256,12 +292,22 @@ class Hostney_Cache_Warmer {
     }
 
     /**
-     * Nudge a stalled-but-live run from the admin poll.
+     * Warm the next page from a progress poll: the settings page's, or the
+     * admin bar's on any page while a run is in flight.
      *
-     * The poll runs in wp-admin, where WP-Cron would otherwise only fire on
-     * whatever admin request happens along.
+     * ⚠⚠ THIS DOES THE WORK, it does not just ask WP-Cron to. See the class
+     * docblock: the cron request travels the site's public route, and on a site
+     * where that route refuses it the run never moved however long somebody
+     * watched it.
      */
-    public function nudge() {
+    public function advance() {
+        if ( ! $this->is_running() ) {
+            return;
+        }
+
+        $this->work( 1, self::POLL_MAX_URLS );
+
+        // Keep the background engine armed too, for when the page is closed.
         if ( $this->is_running() ) {
             $this->schedule_next();
         }
@@ -270,12 +316,62 @@ class Hostney_Cache_Warmer {
     // ---------------------------------------------------------------- the work
 
     /**
-     * Warm one batch of URLs, then queue the next.
+     * WP-Cron: warm one time-boxed batch, then queue the next.
      */
     public function run_batch() {
+        $this->work(
+            (int) apply_filters( 'hostney_cache_warm_batch_seconds', self::BATCH_SECONDS ),
+            self::BATCH_MAX_URLS
+        );
+
+        if ( $this->is_running() ) {
+            $this->schedule_next();
+        }
+    }
+
+    /**
+     * Warm the next pages of the run under its lock. Shared by both engines.
+     *
+     * @param int $budget   seconds this call may keep starting new pages
+     * @param int $max_urls the most pages this call may warm
+     */
+    private function work( $budget, $max_urls ) {
         if ( ! $this->is_running() ) {
             return;
         }
+
+        // Taken: the other engine is warming a page right now. Rendering a
+        // second one beside it is the one thing this class must never do, and
+        // both would write back the same queue - so this caller answers with
+        // the state as it stands and the holder carries on.
+        if ( ! $this->acquire_lock() ) {
+            return;
+        }
+
+        try {
+            $this->warm_next( $budget, $max_urls );
+        } finally {
+            $this->release_lock();
+        }
+    }
+
+    /**
+     * The body of a batch. Only ever runs with the lock held (work()).
+     *
+     * @param int $budget
+     * @param int $max_urls
+     */
+    private function warm_next( $budget, $max_urls ) {
+        // Read the run AFTER taking the lock, never before: the batch that held
+        // it may have moved the queue on, or finished the run, a moment ago -
+        // and this request can already hold an older copy in its object cache.
+        $this->forget_cached_run();
+
+        $state = $this->get_state();
+        if ( 'running' !== $state['status'] ) {
+            return;
+        }
+        $run_id = (string) $state['run_id'];
 
         $queue = get_option( self::QUEUE_OPTION, array() );
         if ( ! is_array( $queue ) || empty( $queue ) ) {
@@ -283,10 +379,13 @@ class Hostney_Cache_Warmer {
             return;
         }
 
-        $state      = $this->get_state();
+        // Mark the run alive BEFORE the fetches. A batch that picks up a run
+        // close to STALE_AFTER would otherwise find it "failed" when it comes
+        // to write back - made stale by the batch's own fetch time.
+        $state = $this->set_state( array() );
+
         $delay_us   = (int) apply_filters( 'hostney_cache_warm_delay_ms', 200 ) * 1000;
-        $budget     = (int) apply_filters( 'hostney_cache_warm_batch_seconds', self::BATCH_SECONDS );
-        $deadline   = time() + max( 1, $budget );
+        $deadline   = time() + max( 1, (int) $budget );
         $warmed     = (int) $state['warmed'];
         $failed     = (int) $state['failed'];
         $done       = (int) $state['done'];
@@ -296,7 +395,29 @@ class Hostney_Cache_Warmer {
 
         // Strictly one URL at a time. See the class docblock: a Hostney site has
         // five PHP children and every one of these is a full uncached render.
-        while ( ! empty( $queue ) && $in_batch < self::BATCH_MAX_URLS && time() < $deadline ) {
+        while ( ! empty( $queue ) && $in_batch < $max_urls ) {
+            if ( $in_batch > 0 ) {
+                // The time box is checked before every page but the first, so a
+                // batch always warms at least one: a one-page poll that started
+                // just as the clock ticked over would otherwise do nothing.
+                if ( time() >= $deadline ) {
+                    break;
+                }
+
+                // Between pages too, not only at the end: whoever pressed Stop
+                // wants the renders to stop, not to run out the time box.
+                if ( ! $this->is_current_run( $run_id ) ) {
+                    return;
+                }
+
+                // Breathe between requests. One render at a time is the point;
+                // this just widens the gap so a visitor arriving mid-run is
+                // never queued behind us.
+                if ( $delay_us > 0 ) {
+                    usleep( $delay_us );
+                }
+            }
+
             $url    = array_shift( $queue );
             $result = $this->fetch( $url );
 
@@ -311,13 +432,14 @@ class Hostney_Cache_Warmer {
                 $cache_seen = true;
             }
             $current = $url;
+        }
 
-            // Breathe between requests. One render at a time is the point; this
-            // just widens the gap so a visitor arriving mid-run is never queued
-            // behind us.
-            if ( $delay_us > 0 ) {
-                usleep( $delay_us );
-            }
+        // Write back only into the run this batch started on. Stop can land
+        // while it fetches - and a new run can start straight after - and this
+        // batch's copy written on top would restart the old run or overwrite
+        // the new one's queue.
+        if ( ! $this->is_current_run( $run_id ) ) {
+            return;
         }
 
         update_option( self::QUEUE_OPTION, $queue, false );
@@ -331,10 +453,7 @@ class Hostney_Cache_Warmer {
 
         if ( empty( $queue ) ) {
             $this->finish();
-            return;
         }
-
-        $this->schedule_next();
     }
 
     /**
@@ -371,6 +490,87 @@ class Hostney_Cache_Warmer {
             'current'     => '',
             'message'     => $message,
         ) );
+    }
+
+    // ---------------------------------------------------------------- the lock
+
+    /**
+     * Take the run's lock without waiting.
+     *
+     * ⚠ A MySQL named lock, not an option row: it belongs to this request's
+     * database connection, so a batch that dies half way - a PHP fatal, a
+     * killed worker, a timeout - lets go of it with the connection, and nothing
+     * can be left holding the run for good.
+     *
+     * @return bool true when this request may warm
+     */
+    private function acquire_lock() {
+        global $wpdb;
+
+        $got = $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, 0)', $this->lock_name() ) );
+
+        if ( null === $got ) {
+            // NULL is an error, not "taken" (that is "0"): a database with no
+            // named locks. Going ahead loses the overlap guard there; refusing
+            // would stop every warm-up on that database for good.
+            return true;
+        }
+
+        $this->lock_held = ( '1' === (string) $got );
+        return $this->lock_held;
+    }
+
+    /**
+     * Let go of the lock, if this request took it.
+     */
+    private function release_lock() {
+        global $wpdb;
+
+        if ( ! $this->lock_held ) {
+            return;
+        }
+        $this->lock_held = false;
+
+        $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $this->lock_name() ) );
+    }
+
+    /**
+     * The lock's name.
+     *
+     * ⚠ MySQL lock names are shared by every database on the server - on a
+     * Hostney box, by every site on it - so this one is keyed on the site's own
+     * secret salt: unique to the site, and not a name a neighbour could work out
+     * and hold to stop this site's warm-ups. Cut to 32 characters so the name
+     * stays inside MySQL's 64 even if wp_hash() moves to a longer digest.
+     *
+     * @return string
+     */
+    private function lock_name() {
+        return 'hostney_warm_' . substr( wp_hash( 'hostney_cache_warm_lock|' . get_current_blog_id() ), 0, 32 );
+    }
+
+    /**
+     * Is the run a batch started on still the one in progress? Read from the
+     * database, never from this request's copy.
+     *
+     * @param string $run_id the run_id the batch read when it took the lock
+     * @return bool
+     */
+    private function is_current_run( $run_id ) {
+        $this->forget_cached_run();
+        $state = $this->get_state();
+
+        return 'running' === $state['status'] && (string) $state['run_id'] === $run_id;
+    }
+
+    /**
+     * Drop this request's copy of the run, so the next read comes from the
+     * database. Both options are saved with autoload off, so each is cached
+     * under its own key in 'options', never inside alloptions.
+     */
+    private function forget_cached_run() {
+        wp_cache_delete( self::STATE_OPTION, 'options' );
+        wp_cache_delete( self::QUEUE_OPTION, 'options' );
     }
 
     /**

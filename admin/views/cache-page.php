@@ -279,9 +279,10 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                 plain purge would leave the next visitor to each page waiting for it to be rendered.
             </p>
             <p>
-                This runs in the background, one page at a time, so it never competes with real
-                visitors for this site&rsquo;s PHP workers. That makes it deliberately unhurried &mdash;
-                a few hundred pages takes tens of minutes. You can leave this page; the run carries on
+                This works one page at a time, so it never competes with real visitors for this
+                site&rsquo;s PHP workers. That makes it deliberately unhurried &mdash; a few hundred pages
+                takes tens of minutes. It moves on its own while this page (or any page with the admin
+                bar) is open. If you leave, it carries on whenever WordPress runs its scheduled tasks,
                 and the progress comes back when you return.
             </p>
 

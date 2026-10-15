@@ -107,8 +107,12 @@ class Hostney_Cache_Admin {
             );
 
             wp_localize_script( 'hostney-cache-js', 'hostneyCache', array(
-                'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-                'nonce'   => wp_create_nonce( 'hostney_cache_nonce' ),
+                'ajaxUrl'     => admin_url( 'admin-ajax.php' ),
+                'nonce'       => wp_create_nonce( 'hostney_cache_nonce' ),
+                // A run in flight makes this page one of its engines (cache.js
+                // hostneyAdminBarFollowWarm). A string, because
+                // wp_localize_script turns every scalar into one anyway.
+                'warmRunning' => $this->warmer->is_running() ? '1' : '0',
             ) );
         }
     }
@@ -238,10 +242,11 @@ class Hostney_Cache_Admin {
     /**
      * AJAX: Progress of the current or last warm-up.
      *
-     * ⚠ This also NUDGES cron. WP-Cron rides on real traffic, and a site that
-     * is fully cached has very little of it reaching PHP — so while somebody
-     * watches the progress bar, this poll is what keeps the run moving. Drop
-     * the nudge and the bar sits still on exactly the sites the feature is for.
+     * ⚠⚠ THIS ALSO WARMS THE NEXT PAGE (Hostney_Cache_Warmer::advance()). While
+     * somebody has the settings page - or any page with the admin bar - open,
+     * this poll is what moves the run. It used to only nudge WP-Cron, whose
+     * request goes out to the site's public address and back, so on a site
+     * where that route is refused the bar never moved at all.
      */
     public function ajax_warm_status() {
         check_ajax_referer( 'hostney_cache_nonce', 'nonce' );
@@ -250,7 +255,7 @@ class Hostney_Cache_Admin {
             wp_send_json_error( array( 'message' => 'Unauthorized.' ) );
         }
 
-        $this->warmer->nudge();
+        $this->warmer->advance();
 
         wp_send_json_success( array( 'state' => $this->warmer->get_state() ) );
     }

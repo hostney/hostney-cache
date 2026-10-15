@@ -714,15 +714,21 @@
 
         // ── Flush and pre-fetch ──────────────────────────────────────
         //
-        // The work runs on WP-Cron. This poll shows progress AND, on the
-        // server side, nudges cron along - a fully cached site has almost no
-        // traffic reaching PHP, so without the nudge the bar would sit still
-        // on exactly the sites this feature exists for.
+        // ⚠⚠ THIS POLL IS AN ENGINE: every status call warms the next page on
+        // the server (Hostney_Cache_Warmer::advance) before it answers. It used
+        // to only nudge WP-Cron, whose request goes out to the site's public
+        // address and back - so on a site where that route is refused, the bar
+        // sat at "0 of N" however long somebody watched it.
         //
-        // Closing the tab only stops the nudging. The run continues on the
-        // next request the site serves, and reopening this page picks the
-        // progress back up from the stored state.
+        // Closing the tab hands the run to WP-Cron, where that runs. Reopening
+        // this page picks the progress back up from the stored state.
+        //
+        // ⚠ The next poll is timed from the END of the last one, never on a
+        // fixed clock: a poll takes as long as its page takes to render, and an
+        // interval would stack requests up behind a slow page - each holding
+        // one of the few PHP workers the site's visitors need.
         var warmPollTimer = null;
+        var warmPolling = false;
         var WARM_POLL_MS = 2000;
 
         var $warmStart = $('#hostney-warm-start-btn');
@@ -735,6 +741,10 @@
 
         function warmRender(state) {
             if (!state) return;
+
+            // The admin bar label on this page was rendered with the page and
+            // would otherwise sit at its first percentage for the whole run.
+            hostneyAdminBarProgress(state);
 
             var running = state.status === 'running';
             var total = parseInt(state.total, 10) || 0;
@@ -795,21 +805,31 @@
                     if (response.success && response.data) {
                         warmRender(response.data.state);
                     }
-                }
+                },
                 // No error branch on purpose: one dropped poll during a
                 // multi-minute run is not worth telling anybody about, and
-                // the next tick re-reads the authoritative state anyway.
+                // the next poll re-reads the authoritative state anyway.
+                complete: warmScheduleNext
             });
         }
 
+        // One timer, re-armed when each poll ends. clearTimeout first, so an
+        // extra poll (Stop's, the one on page load) can never start a second
+        // chain beside the first.
+        function warmScheduleNext() {
+            clearTimeout(warmPollTimer);
+            warmPollTimer = warmPolling ? setTimeout(warmPoll, WARM_POLL_MS) : null;
+        }
+
         function warmStartPolling() {
-            if (warmPollTimer) return;
-            warmPollTimer = setInterval(warmPoll, WARM_POLL_MS);
+            if (warmPolling) return;
+            warmPolling = true;
+            warmScheduleNext();
         }
 
         function warmStopPolling() {
-            if (!warmPollTimer) return;
-            clearInterval(warmPollTimer);
+            warmPolling = false;
+            clearTimeout(warmPollTimer);
             warmPollTimer = null;
         }
 
@@ -870,10 +890,12 @@
 
         // A run started before this page was loaded - or before it was
         // reloaded - has to show up on arrival, or leaving the page looks
-        // like it cancelled the job.
+        // like it cancelled the job. Polling starts switched on and the first
+        // answer switches it off again when nothing is running; warmPoll()
+        // re-arms itself, so there is no timer to start beside it.
         if ($warmStart.length) {
+            warmPolling = true;
             warmPoll();
-            warmStartPolling();
         }
     });
 
@@ -933,6 +955,9 @@ function hostneyAdminBarWarm(e) {
             var payload = response.data || {};
             label.set(response.success ? 'Pre-fetch started' : (payload.message || 'Could not start'));
             setTimeout(label.restore, 3000);
+            if (response.success) {
+                hostneyAdminBarFollowWarm();
+            }
         },
         error: function () {
             if (!label) return;
@@ -941,6 +966,94 @@ function hostneyAdminBarWarm(e) {
         }
     });
 }
+
+/**
+ * Mirror a run's progress in the admin bar's parent label, in the same words
+ * the server renders it with on page load (Hostney_Cache::add_admin_bar_button).
+ *
+ * @param {object} state the run state from hostney_cache_warm_status
+ */
+function hostneyAdminBarProgress(state) {
+    var item = document.getElementById('wp-admin-bar-hostney-cache');
+    var titleEl = item ? item.querySelector('.ab-item') : null;
+    if (!titleEl || !state) return;
+
+    var total = parseInt(state.total, 10) || 0;
+    var done = parseInt(state.done, 10) || 0;
+    var text = 'Hostney Cache';
+    if (state.status === 'running' && total > 0) {
+        text += ' · pre-fetching ' + Math.round((done / total) * 100) + '%';
+    }
+    titleEl.textContent = text;
+}
+
+/**
+ * Keep a pre-fetch moving from any page that shows the admin bar.
+ *
+ * ⚠ Each status call warms the next page on the server
+ * (Hostney_Cache_Warmer::advance), so this loop is an ENGINE, not a progress
+ * display: a run started from the admin bar - which has no progress bar - would
+ * otherwise move only on WP-Cron, and on a site whose cron request never comes
+ * back it would sit at 0% until it was declared dead. The settings page runs
+ * its own loop with the progress bar, so this one stands down there.
+ *
+ * Waits for each answer before asking again, like the settings page. Stops when
+ * the run ends, when the server refuses (an expired nonce answers the same way
+ * every time), or after a few network failures in a row.
+ */
+function hostneyAdminBarFollowWarm() {
+    if (hostneyAdminBarFollowWarm.active) return;
+    if (document.getElementById('hostney-warm-start-btn')) return;
+    if (!document.getElementById('wp-admin-bar-hostney-cache')) return;
+
+    hostneyAdminBarFollowWarm.active = true;
+    var failures = 0;
+
+    function stop() {
+        hostneyAdminBarFollowWarm.active = false;
+    }
+
+    function poll() {
+        jQuery.ajax({
+            url: hostneyCache.ajaxUrl,
+            type: 'POST',
+            data: {
+                action: 'hostney_cache_warm_status',
+                nonce: hostneyCache.nonce
+            },
+            success: function (response) {
+                var state = response && response.success && response.data ? response.data.state : null;
+                if (!state) {
+                    stop();
+                    return;
+                }
+                failures = 0;
+                hostneyAdminBarProgress(state);
+                if (state.status === 'running') {
+                    setTimeout(poll, 2000);
+                } else {
+                    stop();
+                }
+            },
+            error: function () {
+                failures++;
+                if (failures >= 5) {
+                    stop();
+                    return;
+                }
+                setTimeout(poll, 2000);
+            }
+        });
+    }
+
+    poll();
+}
+
+jQuery(function () {
+    if (window.hostneyCache && hostneyCache.warmRunning === '1') {
+        hostneyAdminBarFollowWarm();
+    }
+});
 
 /**
  * Admin bar purge handler (called from onclick attribute)

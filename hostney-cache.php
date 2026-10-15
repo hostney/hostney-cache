@@ -228,8 +228,11 @@ class Hostney_Cache {
         );
 
         wp_localize_script( 'hostney-cache-adminbar-js', 'hostneyCache', array(
-            'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-            'nonce'   => wp_create_nonce( 'hostney_cache_nonce' ),
+            'ajaxUrl'     => admin_url( 'admin-ajax.php' ),
+            'nonce'       => wp_create_nonce( 'hostney_cache_nonce' ),
+            // Same flag as the admin pages (Hostney_Cache_Admin): a run in
+            // flight makes this page one of its engines.
+            'warmRunning' => $this->warmer->is_running() ? '1' : '0',
         ) );
     }
 
