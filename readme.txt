@@ -4,7 +4,7 @@ Tags: cache, nginx, redis, memcached, performance
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.0
+Stable tag: 1.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -30,7 +30,7 @@ Hostney Cache manages both caching layers on a Hostney site: it purges the nginx
 
 A Hostney account runs one object cache: Redis or Memcached, never both. WordPress has exactly one object-cache slot, so a second engine would only consume memory nothing reads from.
 
-The drop-in this plugin installs detects which engine is running on every request. That means switching engines in the Hostney control panel needs no action here: the next request finds the new socket and connects. If neither engine is running, the drop-in falls back to a per-request in-memory cache, which is what WordPress does with no drop-in at all.
+The drop-in this plugin installs detects which engine is running on every request. That means switching engines in the Hostney control panel needs no action here: the next request finds the new socket and connects. If neither engine is running, the drop-in steps back to what WordPress does with no drop-in at all: a per-request in-memory cache, with transients kept in the database.
 
 == Installation ==
 
@@ -45,6 +45,9 @@ Purging the cache is instant, but it leaves the next visitor to each page waitin
 It runs in the background, **one page at a time**. A hosting account has a small, fixed number of PHP workers, and warming is by definition a stream of uncached requests - so a fast warm-up would slow the site down for real visitors while claiming to speed it up. Progress is shown on the plugin page and you can leave and come back to it.
 
 == Changelog ==
+
+= 1.3.1 =
+* Fix: on a site with no Redis or Memcached running, WordPress's scheduled tasks (WP-Cron) never ran, and anything kept as a transient was lost after one page view. The object cache drop-in now keeps transients in the database when no cache service answers, as WordPress does with no drop-in at all
 
 = 1.3.0 =
 * New: Reduce background work. Turn off the emoji script, embeds, front-end Dashicons and the extra head tags, and slow down or limit the background activity of an open admin tab. Every option is off by default and applies only to this site

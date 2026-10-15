@@ -3,7 +3,7 @@
  * Plugin Name: Hostney Cache
  * Plugin URI: https://www.hostney.com
  * Description: Automatic nginx page cache and Redis or Memcached object cache management for Hostney hosting.
- * Version: 1.3.0
+ * Version: 1.3.1
  * Author: Hostney
  * Author URI: https://www.hostney.com
  * License: GPL v2 or later
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'HOSTNEY_CACHE_VERSION', '1.3.0' );
+define( 'HOSTNEY_CACHE_VERSION', '1.3.1' );
 define( 'HOSTNEY_CACHE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'HOSTNEY_CACHE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
@@ -161,10 +161,15 @@ class Hostney_Cache {
         // should have been.
         //
         // Installing before an engine is running is FINE and is why there is no
-        // check for one here: the drop-in probes for a socket per request and
-        // falls back to a non-persistent array when it finds none. So a site can
+        // check for one here: the drop-in probes for a socket per request and,
+        // finding none, steps back to WordPress's own behaviour. So a site can
         // be activated today and have Redis switched on next week with nothing
         // to do on the site side - which is the whole promise of the feature.
+        //
+        // ⚠⚠ "FINE" ONLY SINCE 1.3.1. Until then the fallback kept WordPress
+        // believing an external cache was there, so transients lived for one
+        // request and WP-Cron never ran on any site without an object cache -
+        // see wp_cache_init() in the drop-in before touching either half.
         //
         // NEVER OVER A FOREIGN DROP-IN. install() refuses without $force, and
         // nothing here passes it. A site running Object Cache Pro keeps it.

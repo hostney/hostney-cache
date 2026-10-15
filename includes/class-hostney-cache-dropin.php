@@ -213,8 +213,10 @@ class Hostney_Cache_Dropin {
     public function install( $force = false, $backend = null ) {
         // ⚠ NO PER-ENGINE EXTENSION CHECK HERE, unlike 1.1.0, which refused to
         // install unless ext-memcached was loaded. The drop-in probes for BOTH
-        // engines at runtime and falls back to a non-persistent in-memory cache
-        // if neither answers, so installing it is never harmful - and refusing
+        // engines at runtime and, if neither answers, steps back to WordPress's
+        // own behaviour (in-memory cache, transients in the database - the
+        // second half only since 1.3.1, see wp_cache_init() in the drop-in),
+        // so installing it is never harmful - and refusing
         // on the wrong engine's extension is exactly how a Redis account would
         // have been blocked from installing a drop-in that supports Redis.
         if ( $backend === null ) {

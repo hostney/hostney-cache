@@ -32,9 +32,47 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /**
  * Initialise the object cache.
+ *
+ * ⚠⚠ NO ENGINE ANSWERING = TELL WORDPRESS THIS IS NOT AN EXTERNAL CACHE.
+ * WordPress marks the object cache external the moment this file defines
+ * wp_cache_init(), and an external cache is where it keeps TRANSIENTS - in the
+ * cache only, never in the database. The fallback below is a per-request
+ * array, so until 1.3.1 every transient on a site with no Redis or Memcached
+ * running lasted exactly one request. WP-Cron's lock (doing_cron) is a
+ * transient: wp-cron.php found it missing and exited without running
+ * anything, every time, so NO scheduled task ran on those sites - and with the
+ * lock never holding, every page view that reached PHP spawned another cron
+ * request. Login lockouts, API caches and everything else built on transients
+ * broke the same way, with no error anywhere.
+ *
+ * With the flag off, transients go to the options table exactly as on a site
+ * with no drop-in; the wp_cache_* calls still land here, in memory.
+ *
+ * ⚠⚠ NEVER FLIP IT HERE ON MULTISITE. ms-settings.php starts the object cache
+ * a second time, and with the flag already off that call require()s core's
+ * cache.php, which declares wp_cache_init() again - a fatal error on every
+ * page. ms_loaded fires straight after that second start.
  */
 function wp_cache_init() {
     $GLOBALS['wp_object_cache'] = new WP_Object_Cache();
+
+    if ( $GLOBALS['wp_object_cache']->hostney_engine() !== '' ) {
+        return;
+    }
+
+    if ( function_exists( 'is_multisite' ) && is_multisite() ) {
+        add_action( 'ms_loaded', 'hostney_object_cache_not_external', 0 );
+    } else {
+        hostney_object_cache_not_external();
+    }
+}
+
+/**
+ * No engine is answering this request: WordPress keeps transients in the
+ * database, as it does with no drop-in at all. See wp_cache_init().
+ */
+function hostney_object_cache_not_external() {
+    wp_using_ext_object_cache( false );
 }
 
 /**
@@ -164,8 +202,10 @@ function wp_cache_supports( $feature ) {
  * rewrite. The next PHP request finds the new socket and connects.
  *
  * Falls back to a non-persistent in-memory array when neither engine answers,
- * which is what WordPress does with no drop-in at all - the site works, it just
- * rebuilds every value per request.
+ * and then tells WordPress it is NOT an external cache (wp_cache_init()), so
+ * transients go to the database. Only both together are what WordPress does
+ * with no drop-in at all: the array alone lost every transient after one
+ * request, and WP-Cron with them.
  */
 class WP_Object_Cache {
 
