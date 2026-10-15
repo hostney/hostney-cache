@@ -1,0 +1,5 @@
+# Not part of the plugin: `git archive` (tools/build_release.py) leaves these
+# out of the release zip.
+/tools export-ignore
+/RELEASING.md export-ignore
+/.gitattributes export-ignore
