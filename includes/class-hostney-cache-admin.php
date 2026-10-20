@@ -11,6 +11,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Hostney_Cache_Admin {
 
+    /**
+     * The Plugin Name of the foreign drop-in the site chose to keep. Stored by
+     * NAME, not by file hash: the other plugin rewrites its file on every update
+     * of its own, and the choice is about which plugin owns the slot. A drop-in
+     * from a different plugin brings the banner back.
+     */
+    const KEPT_FOREIGN_DROPIN_OPTION = 'hostney_cache_kept_foreign_dropin';
+
     /** @var Hostney_Cache_Purger */
     private $purger;
 
@@ -65,6 +73,120 @@ class Hostney_Cache_Admin {
         // Form POST handlers — drop-in (redirect-based, not AJAX)
         add_action( 'admin_post_hostney_object_cache_install_dropin', array( $this, 'handle_install_dropin' ) );
         add_action( 'admin_post_hostney_object_cache_remove_dropin', array( $this, 'handle_remove_dropin' ) );
+        add_action( 'admin_post_hostney_object_cache_keep_foreign_dropin', array( $this, 'handle_keep_foreign_dropin' ) );
+
+        // Another plugin's object-cache.php in the one drop-in slot (1.3.2).
+        add_action( 'admin_notices', array( $this, 'render_foreign_dropin_notice' ) );
+    }
+
+    /**
+     * Banner: another plugin's object-cache.php holds the drop-in slot.
+     *
+     * WHY (2026-10-19). A site migrated in with Redis Object Cache on its defaults
+     * (127.0.0.1:6379) kept its object cache in the SERVER's own Valkey - the one
+     * holding every queue of the hosting worker - and each of its cache flushes
+     * emptied those queues. The server refuses that connection now, so a drop-in
+     * like that simply has no cache. Either way the site is not using its
+     * account's own Redis / Memcached, and nothing said so: the cache page shows
+     * the drop-in row only while an engine runs, and only on its own page.
+     *
+     * Shown on the Dashboard, the Plugins screen and this plugin's page, to
+     * people who can act on it - never on every admin screen. "Keep this
+     * drop-in" quiets the first two for THAT plugin's drop-in, because a site
+     * deliberately running, say, Object Cache Pro against its account socket is
+     * legitimate. This plugin's own page always shows it.
+     */
+    public function render_foreign_dropin_notice() {
+        if ( ! current_user_can( 'manage_options' ) || ! function_exists( 'get_current_screen' ) ) {
+            return;
+        }
+
+        $screen    = get_current_screen();
+        $screen_id = $screen ? $screen->id : '';
+        $own_page  = ( $screen_id === 'toplevel_page_hostney-cache' );
+        if ( ! $own_page && ! in_array( $screen_id, array( 'dashboard', 'plugins' ), true ) ) {
+            return;
+        }
+
+        // The screen check first: this opens the drop-in, and only these three
+        // screens should pay for it.
+        if ( $this->object_cache->dropin()->get_status() !== 'foreign' ) {
+            return;
+        }
+
+        $name = $this->foreign_dropin_name();
+        if ( ! $own_page && get_option( self::KEPT_FOREIGN_DROPIN_OPTION ) === $name ) {
+            return;
+        }
+
+        $backend = $this->object_cache->active_backend();
+        ?>
+        <div class="notice notice-warning">
+            <p><strong>This site's object cache is not Hostney Cache's.</strong></p>
+            <p>
+                <code>wp-content/object-cache.php</code> belongs to
+                <strong><?php echo esc_html( $name !== '' ? $name : 'another plugin' ); ?></strong>.
+                <?php if ( $backend ) : ?>
+                    Your account's <?php echo esc_html( $backend->get_label() ); ?> is running, but this site does not use it while that file is in place.
+                <?php else : ?>
+                    On Hostney, object caching runs on your account's own Redis or Memcached, which you switch on in the
+                    Hostney control panel. That file may point at a cache server that does not exist here, in which case
+                    this site has no persistent object cache.
+                <?php endif; ?>
+            </p>
+            <p>
+                Replace it with Hostney Cache's drop-in, then deactivate the plugin that installed it on the
+                <a href="<?php echo esc_url( admin_url( 'plugins.php' ) ); ?>">Plugins</a> screen, so it does not put its file back.
+            </p>
+            <div style="margin: 0.5em 0 1em; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                    <?php wp_nonce_field( 'hostney_dropin_action', '_hostney_nonce' ); ?>
+                    <input type="hidden" name="action" value="hostney_object_cache_install_dropin">
+                    <input type="hidden" name="force" value="1">
+                    <button type="submit" class="button button-primary">Replace with Hostney Cache's drop-in</button>
+                </form>
+                <?php if ( ! $own_page ) : ?>
+                    <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                        <?php wp_nonce_field( 'hostney_dropin_action', '_hostney_nonce' ); ?>
+                        <input type="hidden" name="action" value="hostney_object_cache_keep_foreign_dropin">
+                        <button type="submit" class="button-link">Keep this drop-in</button>
+                    </form>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+    }
+
+    /**
+     * The foreign drop-in's Plugin Name header, or '' when it has none.
+     */
+    private function foreign_dropin_name() {
+        $data = get_file_data( $this->object_cache->dropin()->get_path(), array( 'name' => 'Plugin Name' ) );
+        return isset( $data['name'] ) ? trim( (string) $data['name'] ) : '';
+    }
+
+    /**
+     * Form POST: keep the foreign drop-in - quiets the banner on the Dashboard
+     * and the Plugins screen for this plugin's drop-in.
+     */
+    public function handle_keep_foreign_dropin() {
+        check_admin_referer( 'hostney_dropin_action', '_hostney_nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Unauthorized.', 403 );
+        }
+
+        // Read from the file, never from the request: what is kept is the drop-in
+        // actually in place now.
+        if ( $this->object_cache->dropin()->get_status() === 'foreign' ) {
+            // Not autoloaded: only the three banner screens read it, and only on
+            // a site that has a foreign drop-in at all.
+            update_option( self::KEPT_FOREIGN_DROPIN_OPTION, $this->foreign_dropin_name(), false );
+        }
+
+        $back = wp_get_referer();
+        wp_safe_redirect( $back ? $back : admin_url() );
+        exit;
     }
 
     /**
@@ -498,6 +620,10 @@ class Hostney_Cache_Admin {
             // this clears exactly this site.
             $this->object_cache->flush_site();
             $this->object_cache->clear_availability_cache();
+
+            // The slot is ours now. A "keep it" from before must not silence the
+            // banner if that plugin puts its file back later.
+            delete_option( self::KEPT_FOREIGN_DROPIN_OPTION );
 
             // The prefix may be brand new, and maybe_announce() would otherwise
             // sit behind its 12-hour guard - leaving this site invisible in

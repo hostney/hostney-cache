@@ -3,7 +3,7 @@
  * Plugin Name: Hostney Cache
  * Plugin URI: https://www.hostney.com
  * Description: Automatic nginx page cache and Redis or Memcached object cache management for Hostney hosting.
- * Version: 1.3.1
+ * Version: 1.3.2
  * Author: Hostney
  * Author URI: https://www.hostney.com
  * License: GPL v2 or later
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'HOSTNEY_CACHE_VERSION', '1.3.1' );
+define( 'HOSTNEY_CACHE_VERSION', '1.3.2' );
 define( 'HOSTNEY_CACHE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'HOSTNEY_CACHE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
@@ -192,6 +192,7 @@ class Hostney_Cache {
         wp_clear_scheduled_hook( Hostney_Cache_Cleanup::CRON_HOOK );
         delete_option( Hostney_Cache_Warmer::STATE_OPTION );
         delete_option( Hostney_Cache_Warmer::QUEUE_OPTION );
+        delete_option( Hostney_Cache_Admin::KEPT_FOREIGN_DROPIN_OPTION );
 
         // Clear and de-register this site's keys BEFORE the drop-in goes. The
         // prefix comes from the drop-in, so once it is removed nothing can work

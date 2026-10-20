@@ -4,7 +4,7 @@ Tags: cache, nginx, redis, memcached, performance
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.1
+Stable tag: 1.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -45,6 +45,9 @@ Purging the cache is instant, but it leaves the next visitor to each page waitin
 It runs in the background, **one page at a time**. A hosting account has a small, fixed number of PHP workers, and warming is by definition a stream of uncached requests - so a fast warm-up would slow the site down for real visitors while claiming to speed it up. Progress is shown on the plugin page. While that page, or any page with the admin bar, is open, the warm-up moves on its own; if you leave, it carries on whenever WordPress runs its scheduled tasks, and you can come back to it.
 
 == Changelog ==
+
+= 1.3.2 =
+* New: a notice on the Dashboard, the Plugins screen and the plugin page when another plugin's object cache file (wp-content/object-cache.php) is installed. While it is in place this site does not use your account's Redis or Memcached. The notice names the plugin and offers to replace the file with Hostney Cache's drop-in, or to keep it
 
 = 1.3.1 =
 * Fix: on a site with no Redis or Memcached running, WordPress's scheduled tasks (WP-Cron) never ran, and anything kept as a transient was lost after one page view. The object cache drop-in now keeps transients in the database when no cache service answers, as WordPress does with no drop-in at all
