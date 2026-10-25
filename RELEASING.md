@@ -1,8 +1,13 @@
 # Releasing Hostney Cache
 
-A release is two files in the R2 bucket behind static.hostney.com, folder
+A release is three files in the R2 bucket behind static.hostney.com, folder
 `downloads/`:
 
+- `plugin-checksums/hostney-cache/<version>.json` - every file of the zip with
+  its md5 and sha256, in wordpress.org's plugin-checksums shape. The panel's
+  WordPress integrity check compares an installed copy with it. wordpress.org
+  has no list for a plugin it does not host, so without this file the plugin
+  reads "Not verified" on every site (hostney-cli `WPChecksumHostneyURL`).
 - `hostney-cache.zip` - the plugin. New sites, migrations and the panel's
   "Install Hostney Cache" button install it from this fixed address.
 - `hostney-cache.json` - `{ "slug": "hostney-cache", "version": "1.3.1", ... }`.
@@ -20,12 +25,31 @@ A release needs no worker deploy.
 2. Commit. The build refuses a tree with uncommitted changes.
 3. `python tools/build_release.py` builds from that commit into
    `_dist/hostney-cache/<version>/` next to this repository, like the
-   migration plugin's releases: `hostney-cache.zip`, `hostney-cache.json` and
+   migration plugin's releases: `hostney-cache.zip`, `hostney-cache.json`,
    `RELEASE_NOTES_v<version>.md` (the changelog entry, requirements and the
-   SHA256). It prints the upload steps. It refuses to overwrite a version folder
+   SHA256) and `plugin-checksums/hostney-cache/<version>.json` (read from that
+   zip). It prints the upload steps. It refuses to overwrite a version folder
    built from another commit, because that one may already be uploaded.
-4. Upload the **zip first**, check its ETag against the printed md5, and only
-   then upload the json.
+4. Upload the **checksum list first**, to the same path under `downloads/`. Then
+   the zip: check its ETag against the printed md5. Only then the json.
+
+## The checksum list
+
+The list goes up first because a version no site has yet is never asked for.
+After the zip, new installs start getting the new version at once. A check that
+finds no list for a version waits an hour before it asks again.
+
+A worker keeps a published list for good, because a version's files never change.
+So **never replace a published list**: the script refuses to write a different
+one over a file that is already there. If a wrong list ever went up, release a
+new version. Then delete the wrong copy on every web worker:
+`/var/cache/hostney/wp-checksums/hostney-plugins/hostney-cache/<version>.json`.
+
+`python tools/build_release.py --lists-for-built` writes the list for every
+version already in `_dist`, from that version's own zip, checked against its
+json. Nothing is rebuilt. This is how releases built before the lists existed
+get theirs. Versions zipped by hand before `build_release.py` existed have none,
+and read "Not verified" until the site is updated.
 
 ## Why the order matters
 

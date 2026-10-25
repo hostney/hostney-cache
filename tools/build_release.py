@@ -5,15 +5,24 @@ migration plugin's releases:
     hostney-cache.zip           the plugin
     hostney-cache.json          { slug, version, sha256, md5, size, commit, built_at }
     RELEASE_NOTES_v<version>.md the changelog entry, requirements and the SHA256
+    plugin-checksums/hostney-cache/<version>.json
+                                every file of the zip with its md5 + sha256, in
+                                wordpress.org's plugin-checksums shape
 
-All three come from ONE commit (HEAD of a clean tree). The zip and the json go
+All of them come from ONE commit (HEAD of a clean tree). The zip and the json go
 to the R2 bucket behind static.hostney.com, folder downloads/: every web
 worker's discovery reads the json to learn the published version and replaces
-older copies with the zip (api library/hostney_cache_plugin.js). RELEASING.md
-has the whole procedure; the upload order is printed at the end.
+older copies with the zip (api library/hostney_cache_plugin.js). The checksum
+list goes to downloads/plugin-checksums/hostney-cache/<version>.json: the
+panel's integrity check compares an installed copy with it (wordpress.org has
+no list for a plugin it does not host - hostney-cli WPChecksumHostneyURL).
+RELEASING.md has the whole procedure; the upload order is printed at the end.
 
     python tools/build_release.py              # _dist next to this repo
     python tools/build_release.py --dist DIR   # another _dist folder
+    python tools/build_release.py --lists-for-built
+        # the checksum list for every version ALREADY in _dist, read from that
+        # version's own zip (checked against its json) - nothing is rebuilt
 
 Refuses: a dirty tree; a version that differs between the plugin header,
 HOSTNEY_CACHE_VERSION and readme.txt's Stable tag; a version the worker would
@@ -39,6 +48,9 @@ ZIP_NAME = f"{SLUG}.zip"
 META_NAME = f"{SLUG}.json"
 BASE_URL = "https://static.hostney.com/downloads/"
 REPO_URL = "https://github.com/hostney/hostney-cache"
+# The checksum list's place, the same under _dist/hostney-cache/<version>/ and under
+# downloads/ in the bucket (the CLI asks <WPChecksumHostneyURL>/<slug>/<version>.json).
+LISTS_DIR = "plugin-checksums"
 
 # The worker's own rule (api library/hostney_cache_plugin.js RELEASE_VERSION):
 # keep the two equal, or a release it refuses goes out as "not published".
@@ -142,13 +154,93 @@ def write_atomically(path, data):
     os.replace(temp, path)
 
 
+def list_path(out, version):
+    return out / LISTS_DIR / SLUG / f"{version}.json"
+
+
+def checksum_list(zip_path, version):
+    """Every file of the zip, relative to the plugin's folder, with its md5 + sha256 -
+    wordpress.org's plugin-checksums shape, which the CLI already reads. A copy
+    installed from this zip has exactly these files: the plugin writes only outside
+    its folder (the object-cache.php drop-in in wp-content)."""
+    files = {}
+    with zipfile.ZipFile(zip_path) as archive:
+        for name in sorted(archive.namelist()):
+            if name.endswith("/"):
+                continue
+            rel = name[len(SLUG) + 1:]
+            if not name.startswith(f"{SLUG}/") or not rel or rel.startswith("/") or "\\" in rel \
+                    or any(part in ("", ".", "..") for part in rel.split("/")):
+                fail(f"{zip_path}: an entry the integrity check could not name: {name!r}")
+            data = archive.read(name)
+            files[rel] = {
+                "md5": hashlib.md5(data, usedforsecurity=False).hexdigest(),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+    if f"{SLUG}.php" not in files:
+        fail(f"{zip_path} has no {SLUG}/{SLUG}.php")
+    doc = {"plugin": SLUG, "version": version, "source": f"{BASE_URL}{ZIP_NAME}", "files": files}
+    return (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def write_list(out, version, zip_path):
+    """Writes the version's list; one already there must be byte-identical - it may
+    have been uploaded, and every worker keeps a published list for good."""
+    target = list_path(out, version)
+    body = checksum_list(zip_path, version)
+    if target.is_file():
+        if target.read_bytes() != body:
+            fail(f"{target} already exists with other content - it may have been uploaded. "
+                 f"Never replace a published list; release a new version instead.")
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_atomically(target, body)
+    return target
+
+
+def lists_for_built(dist_root):
+    """The list for every version already in _dist, from that version's OWN zip - never
+    a rebuild: a release folder is what was uploaded."""
+    base = dist_root / SLUG
+    folders = sorted(p for p in base.iterdir() if p.is_dir()) if base.is_dir() else []
+    if not folders:
+        fail(f"no built version in {base}")
+    for out in folders:
+        zip_path, meta_path = out / ZIP_NAME, out / META_NAME
+        if not zip_path.is_file() or not meta_path.is_file():
+            print(f"  {out.name}: skipped - no {ZIP_NAME} + {META_NAME} here")
+            continue
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        version = meta.get("version")
+        if version != out.name or not RELEASE_VERSION.match(version or ""):
+            fail(f"{meta_path} says version {version!r} in the folder {out.name}")
+        data = zip_path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != meta.get("sha256"):
+            fail(f"{zip_path} is not the zip {meta_path} describes (sha256 differs)")
+        with zipfile.ZipFile(zip_path) as archive:
+            zipped = versions(archive.read(f"{SLUG}/{SLUG}.php").decode("utf-8"),
+                              archive.read(f"{SLUG}/readme.txt").decode("utf-8"))
+        if zipped != (version, version, version):
+            fail(f"{zip_path} says {zipped}, its folder says {version}")
+        target = write_list(out, version, zip_path)
+        print(f"  {version}: {target}")
+        print(f"      upload to downloads/{LISTS_DIR}/{SLUG}/{version}.json, then check it:")
+        print(f"      curl -s {BASE_URL}{LISTS_DIR}/{SLUG}/{version}.json | head -3")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build a Hostney Cache release into _dist/hostney-cache/<version>/.")
     parser.add_argument("--dist", type=Path, default=ROOT.parent / "_dist",
                         help="the _dist folder (default: _dist next to this repository)")
-    dist_root = parser.parse_args().dist.resolve()
+    parser.add_argument("--lists-for-built", action="store_true",
+                        help="write the checksum list of every version already in _dist from its own zip")
+    args = parser.parse_args()
+    dist_root = args.dist.resolve()
     if not dist_root.is_dir():
         fail(f"{dist_root} does not exist - pass the _dist folder with --dist")
+    if args.lists_for_built:
+        lists_for_built(dist_root)
+        return
 
     dirty = git("status", "--porcelain", "--untracked-files=all").splitlines()
     if dirty:
@@ -218,6 +310,7 @@ def main():
     notes = release_notes(version, readme, sha256, commit).encode("utf-8")
 
     os.replace(built, out / ZIP_NAME)
+    write_list(out, version, out / ZIP_NAME)
     write_atomically(out / META_NAME, body)
     write_atomically(out / f"RELEASE_NOTES_v{version}.md", notes)
 
@@ -225,13 +318,16 @@ def main():
     print(f"  {ZIP_NAME}   {len(data)} bytes, md5 {md5}")
     print(f"  {META_NAME}")
     print(f"  RELEASE_NOTES_v{version}.md")
+    print(f"  {LISTS_DIR}/{SLUG}/{version}.json")
     print()
     print("Upload to the R2 bucket behind static.hostney.com, folder downloads/ - IN THIS ORDER:")
-    print(f"  1. {ZIP_NAME}")
-    print("  2. check the zip is the new one - its ETag is the md5 above:")
+    print(f"  1. {LISTS_DIR}/{SLUG}/{version}.json  (to downloads/{LISTS_DIR}/{SLUG}/{version}.json)")
+    print(f"       curl -s {BASE_URL}{LISTS_DIR}/{SLUG}/{version}.json | head -3")
+    print(f"  2. {ZIP_NAME}")
+    print("  3. check the zip is the new one - its ETag is the md5 above:")
     print(f"       curl -sI {BASE_URL}{ZIP_NAME} | grep -i etag")
-    print(f"  3. {META_NAME}  <- the release starts here: discovery replaces older copies")
-    print(f"  4. curl -s {BASE_URL}{META_NAME}")
+    print(f"  4. {META_NAME}  <- the release starts here: discovery replaces older copies")
+    print(f"  5. curl -s {BASE_URL}{META_NAME}")
     print()
     print("A json ahead of its zip makes every replace install the old zip: each worker")
     print("logs one ERROR and stops replacing for 6 hours. Zip first.")
