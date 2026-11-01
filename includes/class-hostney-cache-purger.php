@@ -58,7 +58,66 @@ class Hostney_Cache_Purger {
         }
 
         $home = get_option( 'home' );
-        return wp_parse_url( $home, PHP_URL_HOST );
+        $host = (string) wp_parse_url( $home, PHP_URL_HOST );
+
+        // ⚠ "." IS NOT A HOSTNAME. The platform's worker runs WP-CLI with
+        // HTTP_HOST='.', so on a site the mu-plugin has not reached yet home
+        // reads "http://." there, and a purge addressed to it lands on the
+        // server's default site. No hostname = no purge (send_purge_request).
+        return trim( $host, '.' ) === '' ? '' : $host;
+    }
+
+    /**
+     * Whether this request is WP-CLI.
+     *
+     * ⚠⚠ UNDER WP-CLI EVERY CALL TO THIS SERVER'S nginx GOES OVER https. A
+     * Hostney site's port-80 server block answers the certificate check and
+     * redirects everything else to https (hostney-cli virtual-host.template):
+     * the purge endpoint and the page cache live in the 443 block only. A web
+     * request knows its scheme (is_ssl(), home_url()); WP-CLI has none - is_ssl()
+     * is false, and under the platform's worker home_url() reads "http://." -
+     * so until 1.3.3 every purge started from WP-CLI went to port 80, was
+     * redirected to the public address, was refused there, and the page cache
+     * was never cleared for a change made over WP-CLI.
+     *
+     * @return bool
+     */
+    public static function is_wp_cli() {
+        return defined( 'WP_CLI' ) && WP_CLI;
+    }
+
+    /**
+     * The scheme every request to 127.0.0.1 uses for a purge or a status check.
+     *
+     * @return string 'https' | 'http'
+     */
+    private function purge_scheme() {
+        return ( is_ssl() || self::is_wp_cli() ) ? 'https' : 'http';
+    }
+
+    /**
+     * The scheme visitors reach this site's cached pages on.
+     *
+     * From the SITE, not is_ssl(): nginx puts $scheme in the cache key, and the
+     * current request's own scheme (an admin page, a cron request) is
+     * incidental - asking over http about a site visitors reach over https
+     * reads or fills a key nobody ever asks for. Under WP-CLI there is no site
+     * scheme to read (see is_wp_cli()), and a Hostney site caches over https only.
+     *
+     * ⚠ ONE COPY: the page-cache check below and the warmer's fetch both use it.
+     *
+     * @return string 'https' | 'http'
+     */
+    public function site_scheme() {
+        if ( self::is_wp_cli() ) {
+            return 'https';
+        }
+
+        $scheme = wp_parse_url( home_url(), PHP_URL_SCHEME );
+        if ( $scheme === 'http' || $scheme === 'https' ) {
+            return $scheme;
+        }
+        return is_ssl() ? 'https' : 'http';
     }
 
     /**
@@ -352,17 +411,28 @@ class Hostney_Cache_Purger {
      * Send a purge request to the Nginx endpoint
      */
     private function send_purge_request( $body ) {
+        if ( empty( $this->domain ) ) {
+            return array(
+                'success' => false,
+                'message' => 'This site\'s own address is not known here, so its page cache could not be cleared.',
+            );
+        }
+
         // Call localhost directly — DNS resolves the domain to the public IP,
         // which would arrive from an external address and get blocked by allow/deny.
         // The Host header lets nginx match the correct server block.
-        $scheme = is_ssl() ? 'https' : 'http';
         // phpcs:ignore PluginCheck.CodeAnalysis.Localhost.Found -- Intentional: must call localhost to stay within nginx allow/deny rules
-        $url = $scheme . '://127.0.0.1/.well-known/hostney-cache-purge';
+        $url = $this->purge_scheme() . '://127.0.0.1/.well-known/hostney-cache-purge';
 
         $response = wp_remote_post( $url, array(
-            'timeout'   => 30,
-            'sslverify' => false,
-            'body'      => wp_json_encode( $body ),
+            'timeout'     => 30,
+            'sslverify'   => false,
+            // ⚠ NEVER FOLLOWED. A redirect here means the request reached the
+            // wrong server block (see is_wp_cli()); following it sent the purge to
+            // the public address, which refuses outside callers. A 301 is a
+            // failure to report, not a place to go.
+            'redirection' => 0,
+            'body'        => wp_json_encode( $body ),
             'headers'   => array(
                 'Content-Type' => 'application/json',
                 'Host'         => $this->domain,
@@ -426,15 +496,19 @@ class Hostney_Cache_Purger {
      * Check if the purge endpoint is reachable
      */
     public function check_endpoint() {
+        if ( empty( $this->domain ) ) {
+            return false;
+        }
+
         // Call localhost directly with Host header (same reason as send_purge_request)
-        $scheme = is_ssl() ? 'https' : 'http';
         // phpcs:ignore PluginCheck.CodeAnalysis.Localhost.Found -- Intentional: must call localhost to stay within nginx allow/deny rules
-        $url = $scheme . '://127.0.0.1/.well-known/hostney-cache-purge';
+        $url = $this->purge_scheme() . '://127.0.0.1/.well-known/hostney-cache-purge';
 
         $response = wp_remote_post( $url, array(
-            'timeout'   => 5,
-            'sslverify' => false,
-            'body'      => wp_json_encode( array( 'action' => 'status' ) ),
+            'timeout'     => 5,
+            'sslverify'   => false,
+            'redirection' => 0,
+            'body'        => wp_json_encode( array( 'action' => 'status' ) ),
             'headers'   => array(
                 'Content-Type' => 'application/json',
                 'Host'         => $this->domain,
@@ -485,12 +559,7 @@ class Hostney_Cache_Purger {
      * state rather than this server's.
      */
     public function detect_page_cache() {
-        // Scheme from the SITE, not is_ssl(). nginx puts $scheme in the cache
-        // key, and an admin request's own scheme is incidental.
-        $scheme = wp_parse_url( home_url(), PHP_URL_SCHEME );
-        if ( $scheme !== 'http' && $scheme !== 'https' ) {
-            $scheme = is_ssl() ? 'https' : 'http';
-        }
+        $scheme = $this->site_scheme();
 
         // phpcs:ignore PluginCheck.CodeAnalysis.Localhost.Found -- Intentional: the public hostname may answer from an edge PoP, not this origin
         $response = wp_remote_get( $scheme . '://127.0.0.1/', array(

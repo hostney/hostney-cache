@@ -99,6 +99,30 @@ class Hostney_Cache_Warmer {
      */
     const STALE_AFTER = 300;
 
+    /**
+     * A run that has fetched this many pages without one page-cache header
+     * stops: page caching is off for the site, so every further page would be
+     * rendered and thrown away. Until 1.3.3 it rendered the whole list (up to
+     * 500 pages) before saying so.
+     */
+    const UNCACHED_STOP_AFTER = 5;
+
+    /**
+     * Cron hook that starts a fresh run after an update made in wp-admin
+     * (Hostney_Cache_Hooks::on_site_update).
+     */
+    const AFTER_CHANGE_HOOK = 'hostney_cache_warm_after_change';
+
+    /**
+     * How long after the LAST update the fresh run starts, in seconds.
+     *
+     * ⚠ A DELAY, MOVED ON BY EVERY UPDATE. wp-admin updates plugins one request
+     * at a time, and a run started after the first would render pages while the
+     * next one sits in maintenance mode (503s, nothing stored), then have its
+     * work purged by the next update's purge anyway.
+     */
+    const AFTER_CHANGE_DELAY = 60;
+
     /** @var Hostney_Cache_Purger */
     private $purger;
 
@@ -118,6 +142,7 @@ class Hostney_Cache_Warmer {
      */
     public function register() {
         add_action( self::CRON_HOOK, array( $this, 'run_batch' ) );
+        add_action( self::AFTER_CHANGE_HOOK, array( $this, 'run_after_change' ) );
     }
 
     // ---------------------------------------------------------------- state
@@ -197,9 +222,12 @@ class Hostney_Cache_Warmer {
      * ⚠ FLUSH FIRST, COLLECT SECOND, WARM THIRD, and never overlap them. Warming
      * into a cache that is about to be cleared is work thrown away.
      *
+     * @param bool $purge false when the caller has just cleared the page cache
+     *                    itself (the platform's update worker does, through the
+     *                    server - see Hostney_Cache_CLI::warm)
      * @return array {success, message}
      */
-    public function start() {
+    public function start( $purge = true ) {
         if ( $this->is_running() ) {
             return array(
                 'success' => false,
@@ -212,14 +240,16 @@ class Hostney_Cache_Warmer {
         // decides one is already scheduled, and never queues ours.
         wp_clear_scheduled_hook( self::CRON_HOOK );
 
-        $purge = $this->purger->purge_all();
-        if ( empty( $purge['success'] ) ) {
-            return array(
-                'success' => false,
-                // Say which half failed. "Warm-up failed" on a purge error sends
-                // the reader looking in the wrong place.
-                'message' => 'Could not clear the cache, so nothing was warmed. ' . ( $purge['message'] ?? '' ),
-            );
+        if ( $purge ) {
+            $purged = $this->purger->purge_all();
+            if ( empty( $purged['success'] ) ) {
+                return array(
+                    'success' => false,
+                    // Say which half failed. "Warm-up failed" on a purge error sends
+                    // the reader looking in the wrong place.
+                    'message' => 'Could not clear the cache, so nothing was warmed. ' . ( $purged['message'] ?? '' ),
+                );
+            }
         }
 
         $urls = $this->collect_urls();
@@ -253,6 +283,74 @@ class Hostney_Cache_Warmer {
             'message' => sprintf( 'Cache cleared. Warming %d URLs in the background.', count( $urls ) ),
             'total'   => count( $urls ),
         );
+    }
+
+    /**
+     * Start a fresh run: stop the one in progress, if any, then start().
+     *
+     * For a site that just CHANGED. A run that is already going walks a list
+     * built before the change and warms pages a purge has since thrown away.
+     *
+     * @param bool $purge see start()
+     * @return array {success, message}
+     */
+    public function restart( $purge = true ) {
+        if ( $this->is_running() ) {
+            $this->stop();
+        }
+        return $this->start( $purge );
+    }
+
+    /**
+     * Ask for a fresh run AFTER_CHANGE_DELAY seconds from now, moving any one
+     * already asked for (see AFTER_CHANGE_DELAY).
+     */
+    public function schedule_after_change() {
+        wp_clear_scheduled_hook( self::AFTER_CHANGE_HOOK );
+        wp_schedule_single_event( time() + self::AFTER_CHANGE_DELAY, self::AFTER_CHANGE_HOOK );
+    }
+
+    /**
+     * WP-Cron: the fresh run asked for after an update. The update's own request
+     * purged the page cache already (Hostney_Cache_Hooks); purging again here
+     * also clears whatever visitors re-cached during the update's last steps.
+     */
+    public function run_after_change() {
+        $this->restart( true );
+    }
+
+    /**
+     * Warm in THIS process until the run ends or the time is up - for WP-CLI,
+     * where nothing polls and a cron request may never come.
+     *
+     * Takes the same lock as the other two engines, so an open admin page or a
+     * cron batch never renders a page beside it: while one of them holds the
+     * lock this waits a second and asks again.
+     *
+     * @param int $seconds the most this may take before it hands what is left
+     *                     to WP-Cron (it finishes the page it is on first)
+     * @return array the run state at the end
+     */
+    public function run_here( $seconds ) {
+        $deadline = time() + max( 1, (int) $seconds );
+
+        while ( $this->is_running() && time() < $deadline ) {
+            $budget = min( self::BATCH_SECONDS, $deadline - time() );
+            if ( ! $this->work( $budget, self::BATCH_MAX_URLS ) ) {
+                // Another engine holds the lock for this run.
+                sleep( 1 );
+            }
+        }
+
+        // Out of time with pages left: WP-Cron takes the rest, as it would for a
+        // run started from the admin page and then left. No spawn_cron(): under
+        // WP-CLI it would post to the site's own address from here, which is
+        // the platform's "http://." placeholder (see Hostney_Cache_Purger::is_wp_cli()).
+        if ( $this->is_running() && ! wp_next_scheduled( self::CRON_HOOK ) ) {
+            wp_schedule_single_event( time(), self::CRON_HOOK );
+        }
+
+        return $this->get_state();
     }
 
     /**
@@ -334,10 +432,11 @@ class Hostney_Cache_Warmer {
      *
      * @param int $budget   seconds this call may keep starting new pages
      * @param int $max_urls the most pages this call may warm
+     * @return bool false when nothing was done: no run, or another engine holds the lock
      */
     private function work( $budget, $max_urls ) {
         if ( ! $this->is_running() ) {
-            return;
+            return false;
         }
 
         // Taken: the other engine is warming a page right now. Rendering a
@@ -345,7 +444,7 @@ class Hostney_Cache_Warmer {
         // both would write back the same queue - so this caller answers with
         // the state as it stands and the holder carries on.
         if ( ! $this->acquire_lock() ) {
-            return;
+            return false;
         }
 
         try {
@@ -353,6 +452,7 @@ class Hostney_Cache_Warmer {
         } finally {
             $this->release_lock();
         }
+        return true;
     }
 
     /**
@@ -432,6 +532,12 @@ class Hostney_Cache_Warmer {
                 $cache_seen = true;
             }
             $current = $url;
+
+            // Nothing to fill: see UNCACHED_STOP_AFTER. finish() says why.
+            if ( ! $cache_seen && $done >= self::UNCACHED_STOP_AFTER ) {
+                $queue = array();
+                break;
+            }
         }
 
         // Write back only into the run this batch started on. Stop can land
@@ -585,17 +691,11 @@ class Hostney_Cache_Warmer {
             $path = '/';
         }
 
-        // Scheme comes from the SITE, not from is_ssl(). nginx puts $scheme in
-        // the cache key, and this runs inside a cron request whose own scheme
-        // is incidental — warming over http a site that visitors reach over
-        // https would fill a key nobody ever asks for.
-        $scheme = wp_parse_url( home_url(), PHP_URL_SCHEME );
-        if ( $scheme !== 'http' && $scheme !== 'https' ) {
-            $scheme = is_ssl() ? 'https' : 'http';
-        }
-
+        // Scheme comes from the SITE, not from is_ssl(): nginx puts $scheme in
+        // the cache key, and this runs inside a cron request or WP-CLI whose own
+        // scheme is incidental. See Hostney_Cache_Purger::site_scheme().
         // phpcs:ignore PluginCheck.CodeAnalysis.Localhost.Found -- Intentional: see the class docblock. The public hostname would warm the edge, not this origin.
-        $local = $scheme . '://127.0.0.1' . $path;
+        $local = $this->purger->site_scheme() . '://127.0.0.1' . $path;
 
         $response = wp_remote_get( $local, array(
             'timeout'     => 15,

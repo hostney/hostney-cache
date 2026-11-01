@@ -14,8 +14,28 @@ class Hostney_Cache_Hooks {
     /** @var Hostney_Cache_Purger */
     private $purger;
 
-    public function __construct( Hostney_Cache_Purger $purger ) {
+    /** @var Hostney_Cache_Warmer */
+    private $warmer;
+
+    /** @var bool Whether this request already asked for the after-update run. */
+    private $warm_asked = false;
+
+    public function __construct( Hostney_Cache_Purger $purger, Hostney_Cache_Warmer $warmer ) {
         $this->purger = $purger;
+        $this->warmer = $warmer;
+
+        // ⚠⚠ CHANGES TO THE CODE, NOT ONLY TO CONTENT (1.3.3). A cached page
+        // links the CSS and scripts of the plugin and theme versions it was
+        // rendered with. An update, a theme switch or a plugin switched on or
+        // off can rename or delete those files (Elementor's post CSS, a
+        // minifier's bundles), and every cached page then loads without them -
+        // "the site looks broken" until the page expires. Until 1.3.3 nothing
+        // purged on any of these.
+        add_action( 'upgrader_process_complete', array( $this, 'on_upgrade' ), 10, 2 );
+        add_action( 'switch_theme', array( $this, 'on_site_update' ), 10, 0 );
+        add_action( 'activated_plugin', array( $this, 'on_plugin_switch' ), 10, 0 );
+        add_action( 'deactivated_plugin', array( $this, 'on_plugin_switch' ), 10, 0 );
+        add_action( 'customize_save_after', array( $this, 'on_plugin_switch' ), 10, 0 );
 
         // Post status transitions (publish, update, trash, untrash)
         add_action( 'transition_post_status', array( $this, 'on_post_status_change' ), 10, 3 );
@@ -31,6 +51,57 @@ class Hostney_Cache_Hooks {
         // Comment changes
         add_action( 'transition_comment_status', array( $this, 'on_comment_status_change' ), 10, 3 );
         add_action( 'comment_post', array( $this, 'on_comment_post' ), 10, 2 );
+    }
+
+    /**
+     * WordPress, a plugin, a theme or a translation was UPDATED.
+     *
+     * Installs are left alone: a newly installed plugin is not running yet, and
+     * switching it on fires activated_plugin.
+     *
+     * @param WP_Upgrader $upgrader
+     * @param array       $hook_extra {action, type, ...}
+     */
+    public function on_upgrade( $upgrader, $hook_extra ) {
+        if ( ! is_array( $hook_extra ) || ( $hook_extra['action'] ?? '' ) !== 'update' ) {
+            return;
+        }
+        if ( ! in_array( $hook_extra['type'] ?? '', array( 'core', 'plugin', 'theme', 'translation' ), true ) ) {
+            return;
+        }
+        $this->on_site_update();
+    }
+
+    /**
+     * An update or a theme switch: purge every page, then pre-fetch them again.
+     *
+     * ⚠⚠ NO RUN STARTS UNDER WP-CLI. The platform's update worker updates one
+     * item per WP-CLI call and asks for ONE run after the last of them (`wp
+     * hostney-cache warm`, Hostney_Cache_CLI); a run asked for here would start
+     * after the first. The purge still happens: it is what keeps a cached page
+     * from linking files the update removed.
+     */
+    public function on_site_update() {
+        $this->purger->queue_full_purge();
+
+        if ( $this->warm_asked || Hostney_Cache_Purger::is_wp_cli() ) {
+            return;
+        }
+        if ( ! Hostney_Cache_Settings::get( 'warm_after_updates' ) ) {
+            return;
+        }
+        $this->warm_asked = true;
+        $this->warmer->schedule_after_change();
+    }
+
+    /**
+     * A plugin switched on or off, or a Customizer save: purge every page.
+     *
+     * No pre-fetch: these come in bursts while somebody looks for the plugin
+     * that broke something, and each would restart the run.
+     */
+    public function on_plugin_switch() {
+        $this->purger->queue_full_purge();
     }
 
     /**

@@ -33,9 +33,20 @@ class Hostney_Cache_Settings {
      * is the hardest kind of report to act on.
      *
      * Everything here is opt-in, per site, forever.
+     *
+     * ⚠ ONE EXCEPTION, warm_after_updates (1.3.3), and the rule above is why it
+     * may be one: it changes nothing a visitor sees. It only re-fills the page
+     * cache an update has just emptied, one page at a time. It is ON so the
+     * pre-fetch after updates reaches every site, and the switch is there for
+     * the site that does not want the background renders.
      */
     public static function defaults() {
         return array(
+            // Pre-fetch every page again after WordPress, a plugin, a theme or a
+            // translation is updated, or the theme switched (the platform's
+            // update worker and wp-admin alike).
+            'warm_after_updates'  => true,
+
             // 'default' | 'slow' | 'minimal'
             'heartbeat_mode'      => 'default',
 
@@ -88,6 +99,13 @@ class Hostney_Cache_Settings {
         }
 
         $clean = self::defaults();
+
+        // ⚠ ABSENT = KEEP, unlike the flags below. Its switch is rendered only on
+        // a site with page caching (the pre-fetch card), so a save from a page
+        // without it must not read "not sent" as "turned off".
+        $clean['warm_after_updates'] = array_key_exists( 'warm_after_updates', $input )
+            ? ! empty( $input['warm_after_updates'] )
+            : (bool) self::get( 'warm_after_updates' );
 
         if ( isset( $input['heartbeat_mode'] ) && in_array( $input['heartbeat_mode'], array( 'default', 'slow', 'minimal' ), true ) ) {
             $clean['heartbeat_mode'] = $input['heartbeat_mode'];

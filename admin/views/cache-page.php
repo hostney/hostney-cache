@@ -311,6 +311,36 @@ $hostney_notice_msg  = isset( $_GET['hostney-message'] ) ? sanitize_text_field( 
                 </div>
 
                 <div id="hostney-warm-feedback" style="display: none;"></div>
+
+                <?php
+                // ⚠ ON BY DEFAULT, the one setting that is (see
+                // Hostney_Cache_Settings::defaults()). Rendered only here, where
+                // page caching exists; Settings::save() keeps the stored value
+                // when a save comes from a page without it.
+                ?>
+                <table class="hostney-checks-table">
+                    <tr>
+                        <td><label for="hostney-warm-after-updates">After updates</label></td>
+                        <td>
+                            <label class="hostney-toggle-row">
+                                <input type="checkbox" id="hostney-warm-after-updates" class="hostney-setting" data-setting="warm_after_updates" <?php checked( $hostney_settings['warm_after_updates'] ); ?>>
+                                <span>Pre-fetch every page again after an update</span>
+                            </label>
+                            <p class="hostney-muted">
+                                An update to WordPress, a plugin, a theme or a translation, and a theme
+                                switch, clear the page cache so no visitor gets a page built for the old
+                                version. With this on, every page is then pre-fetched again, the same way
+                                as the button above. It works for updates made here and for updates
+                                Hostney installs for you.
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+
+                <div class="hostney-btn-group">
+                    <button class="hostney-btn hostney-btn-primary hostney-save-settings-btn">Save settings</button>
+                </div>
+                <div class="hostney-settings-feedback" style="display: none;"></div>
             <?php endif; ?>
         </div>
         </div>

@@ -3,7 +3,7 @@
  * Plugin Name: Hostney Cache
  * Plugin URI: https://www.hostney.com
  * Description: Automatic nginx page cache and Redis or Memcached object cache management for Hostney hosting.
- * Version: 1.3.2
+ * Version: 1.3.3
  * Author: Hostney
  * Author URI: https://www.hostney.com
  * License: GPL v2 or later
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'HOSTNEY_CACHE_VERSION', '1.3.2' );
+define( 'HOSTNEY_CACHE_VERSION', '1.3.3' );
 define( 'HOSTNEY_CACHE_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'HOSTNEY_CACHE_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 
@@ -38,6 +38,8 @@ require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-registry.p
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-cleanup.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-settings.php';
 require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-tuning.php';
+// Registers `wp hostney-cache` under WP-CLI only; defines a class and nothing else otherwise.
+require_once HOSTNEY_CACHE_PLUGIN_DIR . 'includes/class-hostney-cache-cli.php';
 
 /**
  * Main plugin class
@@ -67,7 +69,7 @@ class Hostney_Cache {
         $this->warmer       = $warmer;
         $this->object_cache = $object_cache;
 
-        new Hostney_Cache_Hooks( $purger );
+        new Hostney_Cache_Hooks( $purger, $warmer );
 
         // ⚠ BOTH OUTSIDE the is_admin() branch below. Tuning is front-end work
         // by definition, and the cleanup schedule runs on WP-Cron, which fires
@@ -189,6 +191,7 @@ class Hostney_Cache {
         // in the schedule, fires with no handler registered, and the admin page
         // comes back next activation still claiming a run is in progress.
         wp_clear_scheduled_hook( Hostney_Cache_Warmer::CRON_HOOK );
+        wp_clear_scheduled_hook( Hostney_Cache_Warmer::AFTER_CHANGE_HOOK );
         wp_clear_scheduled_hook( Hostney_Cache_Cleanup::CRON_HOOK );
         delete_option( Hostney_Cache_Warmer::STATE_OPTION );
         delete_option( Hostney_Cache_Warmer::QUEUE_OPTION );

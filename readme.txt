@@ -4,7 +4,7 @@ Tags: cache, nginx, redis, memcached, performance
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.2
+Stable tag: 1.3.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -18,6 +18,7 @@ Hostney Cache manages both caching layers on a Hostney site: it purges the nginx
 
 * Automatic cache purge on post publish, update, trash, and restore
 * Automatic cache purge on taxonomy and comment changes
+* Automatic cache purge after WordPress, plugin, theme and translation updates, a theme switch, a plugin switched on or off, and a Customizer save, followed by a pre-fetch after updates and theme switches
 * Hostney Cache menu in the admin bar with Purge cache, Flush and pre-fetch, and Cache settings
 * Manual "Purge all cache" button in admin bar and admin page
 * "Flush and pre-fetch" button that clears the cache and then warms it back up in the background
@@ -44,7 +45,23 @@ Purging the cache is instant, but it leaves the next visitor to each page waitin
 
 It runs in the background, **one page at a time**. A hosting account has a small, fixed number of PHP workers, and warming is by definition a stream of uncached requests - so a fast warm-up would slow the site down for real visitors while claiming to speed it up. Progress is shown on the plugin page. While that page, or any page with the admin bar, is open, the warm-up moves on its own; if you leave, it carries on whenever WordPress runs its scheduled tasks, and you can come back to it.
 
+After an update the cache is cleared, because a page cached before it can point to files the update replaced. "Pre-fetch after updates" (on by default, on the plugin page) then fills it again: a minute after the last update made in WordPress, or straight after an update run Hostney installs for you.
+
+== WP-CLI ==
+
+* `wp hostney-cache flush-site` empties this site's object cache entries. With Redis only this site's are removed; Memcached cannot tell sites apart, so there it empties the account's whole cache.
+* `wp hostney-cache warm` clears the page cache and pre-fetches every public page in the same process, at most 10 minutes by default (`--seconds=<n>`); what is left carries on in the background. `--no-purge` skips the clear.
+
+Both print one line of JSON.
+
 == Changelog ==
+
+= 1.3.3 =
+* New: the page cache is cleared after WordPress, a plugin, a theme or a translation is updated, the theme is switched, a plugin is switched on or off, or the Customizer is saved. Pages cached before such a change could point to stylesheets and scripts the change replaced, and look broken until they expired
+* New: "Pre-fetch after updates", on by default. After an update or a theme switch every page is pre-fetched again, a minute after the last update made in WordPress. Hostney's own update runs ask for it themselves
+* New: WP-CLI commands `wp hostney-cache flush-site` and `wp hostney-cache warm`
+* Fix: a cache purge started from WP-CLI never reached the cache. It was sent over http, which a Hostney site redirects to https, and the redirect led away from the server. Purges from WP-CLI now go over https and never follow a redirect
+* A pre-fetch on a site without page caching now stops after a few pages and says so, instead of requesting every page first
 
 = 1.3.2 =
 * New: a notice on the Dashboard, the Plugins screen and the plugin page when another plugin's object cache file (wp-content/object-cache.php) is installed. While it is in place this site does not use your account's Redis or Memcached. The notice names the plugin and offers to replace the file with Hostney Cache's drop-in, or to keep it
