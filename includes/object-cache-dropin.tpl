@@ -582,7 +582,14 @@ class WP_Object_Cache {
 
         $cache_key = $this->build_key( $key, $group );
 
-        if ( ! $force && array_key_exists( $cache_key, $this->cache ) ) {
+        // ⚠ $force = "skip this request's copy, ask the backend". With NO backend (nothing
+        // connected: the per-request fallback) this request's array IS the cache, and
+        // WordPress's own WP_Object_Cache ignores $force there. Answering "not found" left
+        // every option deleted in the request reading back: delete_option() reloads
+        // alloptions with wp_load_alloptions( true ) and re-adds a fresh copy with
+        // wp_cache_add(), which never overwrites the stale one (1.3.4 - wp-cron.php's lock
+        // read back after it was released, so the warmer's cron kick stood down).
+        if ( ( ! $force || ! $this->connected ) && array_key_exists( $cache_key, $this->cache ) ) {
             $found = true;
             $this->cache_hits++;
             return is_object( $this->cache[ $cache_key ] ) ? clone $this->cache[ $cache_key ] : $this->cache[ $cache_key ];

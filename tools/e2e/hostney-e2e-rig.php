@@ -51,11 +51,23 @@ add_filter( 'pre_http_request', function ( $pre, $args, $url ) {
     );
     file_put_contents( WP_CONTENT_DIR . '/hny-rig.log', wp_json_encode( $entry, JSON_UNESCAPED_SLASHES ) . "\n", FILE_APPEND );
 
+    // The warmer's own cron kick (1.3.4) goes through for real: this container's
+    // web server IS 127.0.0.1, so wp-cron.php runs the next batch here.
+    if ( substr( $entry['path'], -12 ) === '/wp-cron.php' && ! $entry['cli'] ) {
+        return $pre;
+    }
+
     if ( $entry['scheme'] === 'http' && $entry['cli'] ) {
         return hny_rig_response( 301, array( 'location' => 'https://' . $entry['host'] . $entry['path'] ) );
     }
     if ( $entry['path'] === '/.well-known/hostney-cache-purge' ) {
         return hny_rig_response( 200, array(), '{"success":true,"message":"rig purge"}' );
+    }
+
+    // A page that takes this long to render (e2e_cron_chain.sh: so a run needs several batches).
+    $page_ms = (int) get_option( 'hny_rig_page_ms', 0 );
+    if ( $page_ms > 0 ) {
+        usleep( $page_ms * 1000 );
     }
 
     $mode  = get_option( 'hny_rig_cache', 'on' );
@@ -89,4 +101,14 @@ add_action( 'init', function () {
     hny_rig_fire( $fire );
     echo 'fired ' . esc_html( $fire );
     exit; // the shutdown hooks (the purge) still run
+} );
+
+// e2e_cron_chain.sh: how long a cron batch may warm, and the gap between its pages.
+add_filter( 'hostney_cache_warm_batch_seconds', function ( $seconds ) {
+    $set = (int) get_option( 'hny_rig_batch_seconds', 0 );
+    return $set > 0 ? $set : $seconds;
+} );
+add_filter( 'hostney_cache_warm_delay_ms', function ( $ms ) {
+    $set = get_option( 'hny_rig_warm_delay_ms', '' );
+    return $set === '' ? $ms : (int) $set;
 } );

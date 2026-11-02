@@ -4,7 +4,7 @@ Tags: cache, nginx, redis, memcached, performance
 Requires at least: 5.0
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.3.3
+Stable tag: 1.3.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -55,6 +55,11 @@ After an update the cache is cleared, because a page cached before it can point 
 Both print one line of JSON.
 
 == Changelog ==
+
+= 1.3.4 =
+* Fix: a pre-fetch running on WordPress's scheduled tasks (WP-Cron) could stop halfway and stay "running". Each batch waited for a visit to reach WordPress, and on a cached site almost none do. Each batch now starts the next one itself, so a pre-fetch after an update finishes on its own
+* Fix: a pre-fetch that nothing moved on for five minutes is now saved as stopped, instead of only being shown as stopped
+* Fix: with no Redis or Memcached running, an option deleted during a request could still be read back in the same request. WordPress's own cron lock was one of them, so the next scheduled task waited a minute for no reason
 
 = 1.3.3 =
 * New: the page cache is cleared after WordPress, a plugin, a theme or a translation is updated, the theme is switched, a plugin is switched on or off, or the Customizer is saved. Pages cached before such a change could point to stylesheets and scripts the change replaced, and look broken until they expired

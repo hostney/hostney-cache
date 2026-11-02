@@ -187,6 +187,13 @@ class Hostney_Cache_Warmer {
         if ( $state['status'] === 'running' && ( time() - (int) $state['updated_at'] ) > self::STALE_AFTER ) {
             $state['status']  = 'failed';
             $state['message'] = 'The warm-up stopped: nothing moved it on for five minutes. It moves on its own while this page is open; otherwise it waits for WordPress\'s scheduled tasks (WP-Cron), and those did not run. Start it again and keep this page open until it finishes.';
+            // Saved, not only answered (1.3.4): the option said "running" for good
+            // after a run died, and whatever read it raw - WP-CLI, the platform -
+            // believed it. finished_at = when it last moved, the moment it stopped.
+            if ( empty( $state['finished_at'] ) ) {
+                $state['finished_at'] = (int) $state['updated_at'];
+            }
+            update_option( self::STATE_OPTION, $state, false );
         }
 
         return $state;
@@ -381,12 +388,98 @@ class Hostney_Cache_Warmer {
      * at the site's public address without waiting for an answer, and inside a
      * cron request it does nothing. That is why an open page warms pages itself
      * (advance()) instead of relying on this.
+     *
+     * ⚠⚠ INSIDE A CRON REQUEST THE RUN STARTS ITS OWN NEXT BATCH (1.3.4). Until
+     * then the next batch waited for WP-Cron, and WP-Cron runs only when a
+     * visit reaches PHP - which on a cached site almost none do, while the run's
+     * own fetches arrive while this batch holds the cron lock. More than
+     * STALE_AFTER without a batch and the run was dead (get_state()), its
+     * scheduled tick did nothing when it finally fired, and the state said
+     * "running" for good: a shop's after-update run stopped at 33 of 128 pages
+     * and stayed so for 12 hours (2026-11-02). kick_at_shutdown() fires the next
+     * cron request once WordPress has let go of this one's lock.
+     *
+     * @param bool $kick false when this batch warmed nothing (another engine
+     *                   holds the run - it moves it on itself)
      */
-    private function schedule_next() {
+    private function schedule_next( $kick = true ) {
         if ( ! wp_next_scheduled( self::CRON_HOOK ) ) {
             wp_schedule_single_event( time(), self::CRON_HOOK );
         }
         spawn_cron();
+
+        if ( $kick && wp_doing_cron() ) {
+            $this->kick_at_shutdown();
+        }
+    }
+
+    /** @var bool Whether this request already asked for the next cron request. */
+    private $kick_registered = false;
+
+    /**
+     * Fire the next cron request when this one ends (see schedule_next()).
+     *
+     * At shutdown, not now: wp-cron.php holds WordPress's cron lock while it
+     * runs the events, and a request fired now would find the lock taken and do
+     * nothing. wp-cron.php lets go of it right before it ends, and shutdown runs
+     * after that.
+     */
+    private function kick_at_shutdown() {
+        if ( $this->kick_registered ) {
+            return;
+        }
+        $this->kick_registered = true;
+        add_action( 'shutdown', array( $this, 'kick_cron' ), PHP_INT_MAX );
+    }
+
+    /**
+     * Start the next cron request: what spawn_cron() does, which it refuses
+     * inside a cron request (DOING_CRON) - take WordPress's cron lock with a new
+     * key, then ask wp-cron.php to run under that key without waiting for it.
+     *
+     * ⚠ OVER 127.0.0.1 WITH THE SITE'S HOST, like every fetch of this class -
+     * never the site's public address (see the class docblock: a CDN, a proxy or
+     * a domain not pointing here yet refuses that route, and nothing says so).
+     * Public: the shutdown action calls it.
+     */
+    public function kick_cron() {
+        $this->forget_cached_run();
+        if ( ! $this->is_running() || ! wp_next_scheduled( self::CRON_HOOK ) ) {
+            return;
+        }
+
+        // A lock still held belongs to another cron request: it runs the tick.
+        // ⚠ Read the way wp-cron.php reads it - _get_cron_lock(), fresh from the
+        // database or the object cache - NEVER get_transient(): wp-cron.php has
+        // just deleted the lock, and this request's own copy still answered the
+        // old key, so the kick stood down after every batch (the e2e caught it).
+        $timeout = defined( 'WP_CRON_LOCK_TIMEOUT' ) ? (int) WP_CRON_LOCK_TIMEOUT : 60;
+        $held    = (float) ( function_exists( '_get_cron_lock' ) ? _get_cron_lock() : get_transient( 'doing_cron' ) );
+        if ( $held > microtime( true ) - $timeout ) {
+            return;
+        }
+
+        $key = sprintf( '%.22F', microtime( true ) );
+        set_transient( 'doing_cron', $key );
+
+        $path = wp_parse_url( site_url( 'wp-cron.php' ), PHP_URL_PATH );
+        if ( ! $path ) {
+            $path = '/wp-cron.php';
+        }
+
+        // phpcs:ignore PluginCheck.CodeAnalysis.Localhost.Found -- Intentional: see the class docblock.
+        wp_remote_post( $this->purger->site_scheme() . '://127.0.0.1' . $path . '?doing_wp_cron=' . $key, array(
+            // Long enough for a local TLS handshake and the request to leave;
+            // wp-cron.php carries on without us (ignore_user_abort), as it does
+            // for WordPress's own spawn.
+            'timeout'   => 1,
+            'blocking'  => false,
+            'sslverify' => false,
+            'headers'   => array(
+                'Host'       => $this->purger->get_domain(),
+                'User-Agent' => 'Hostney-Cache-Warmer/' . HOSTNEY_CACHE_VERSION . ' (+https://www.hostney.com)',
+            ),
+        ) );
     }
 
     /**
@@ -417,13 +510,16 @@ class Hostney_Cache_Warmer {
      * WP-Cron: warm one time-boxed batch, then queue the next.
      */
     public function run_batch() {
-        $this->work(
+        $worked = $this->work(
             (int) apply_filters( 'hostney_cache_warm_batch_seconds', self::BATCH_SECONDS ),
             self::BATCH_MAX_URLS
         );
 
         if ( $this->is_running() ) {
-            $this->schedule_next();
+            // Start the next batch ourselves only after warming: a batch that found
+            // the lock taken leaves the run to its holder, or two engines would
+            // chase each other in a loop of empty cron requests.
+            $this->schedule_next( $worked );
         }
     }
 
